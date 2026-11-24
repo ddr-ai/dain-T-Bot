@@ -42,12 +42,22 @@ jobs:
         if: failure()
         working-directory: ios
         run: |
-          echo "=== first 40 xcodebuild error lines ==="
-          grep -m 40 -E "error:" build.log || echo "(no error: lines found in build.log)"
+          echo "=== lines containing error/Error ==="
+          grep -m 40 -i 'error' build.log || echo "(no lines containing error)"
+          echo "=== fatal/failed markers ==="
+          grep -m 10 -iE 'fatal|build failed|segmentation|assert|missing|incompatible|requires' build.log || true
+          echo "=== last 60 lines of build.log ==="
+          tail -60 build.log || true
+          echo "=== write tail to step summary (publicly visible on run page) ==="
+          tail -80 build.log >> "$GITHUB_STEP_SUMMARY" || true
           while IFS= read -r line; do
-            msg=$(echo "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g')
+            msg=$(echo "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/::/%3A%3A/g')
             echo "::error::${msg}"
-          done < <(grep -m 40 -E "error:" build.log || true)
+          done < <(grep -m 20 -i 'error' build.log || true)
+          while IFS= read -r line; do
+            msg=$(echo "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/::/%3A%3A/g')
+            echo "::error::${msg}"
+          done < <(grep -m 10 -iE 'fatal|build failed|requires|missing|incompatible' build.log || true)
 
       - name: Package unsigned .ipa
         working-directory: ios

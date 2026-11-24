@@ -47,9 +47,22 @@ jobs:
         run: npm run build
       - name: Publish built dist to the 'dist' branch (static site source)
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: pwa/dist
-          branch: dist
-          clean: true
-          commit-message: 'pwa dist from CI [skip ci]'
+        working-directory: pwa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd dist
+          git init -b dist .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "pwa dist from CI [skip ci]" >/dev/null
+          if ! git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" dist:dist 2> push.err; then
+            echo "::error::dist push failed:"
+            while IFS= read -r line; do
+              msg=$(echo "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
+              echo "::error::${msg}"
+            done < push.err
+            cat push.err >> "$GITHUB_STEP_SUMMARY" || true
+            exit 1
+          fi
