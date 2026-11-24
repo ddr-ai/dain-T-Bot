@@ -1,0 +1,44 @@
+name: AutopilotTrader
+options:
+  bundleIdPrefix: com.dain.autopilot
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+schemes:
+  AutopilotTrader:
+    build:
+      targets:
+        AutopilotTrader: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+targets:
+  AutopilotTrader:
+    type: application
+    platform: iOS
+    sources:
+      - AutopilotTrader
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dain.autopilot.trader
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_UIUserInterfaceStyle: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+    info:
+      path: AutopilotTrader/Info.plist
+      properties:
+        CFBundleDisplayName: Autopilot
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIApplicationSupportsMultipleScenes: false
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        UIBackgroundModes:
+          - fetch
