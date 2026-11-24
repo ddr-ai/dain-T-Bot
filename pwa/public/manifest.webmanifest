@@ -1,0 +1,25 @@
+{
+  "name": "Crypto Autopilot",
+  "short_name": "Autopilot",
+  "description": "Autonomous Gemini crypto trading bot dashboard: autopilot toggle, risk slider, activity feed and emergency stop.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0e14",
+  "theme_color": "#0b0e14",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

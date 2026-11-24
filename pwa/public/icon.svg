@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0b0e14"/>
+  <path d="M96 352 L176 272 L240 320 L336 192 L416 240" stroke="#22d3ee" stroke-width="24" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M144 120 l40 64 h-24 l40 56 h-56 l-32 -40 h28 z" fill="#f59e0b"/>
+  <text x="256" y="448" font-family="system-ui, Arial, sans-serif" font-size="64" fill="#e2e8f0" text-anchor="middle" font-weight="700">AP</text>
+</svg>
