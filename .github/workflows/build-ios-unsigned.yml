@@ -25,6 +25,7 @@ jobs:
       - name: Build (no code signing)
         working-directory: ios
         run: |
+          set -o pipefail
           xcodebuild \
             -project AutopilotTrader.xcodeproj \
             -scheme AutopilotTrader \
@@ -35,7 +36,18 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             -destination 'generic/platform=iOS' \
-            build
+            build 2>&1 | tee build.log
+
+      - name: Surface compile errors (visible in annotations without log access)
+        if: failure()
+        working-directory: ios
+        run: |
+          echo "=== first 40 xcodebuild error lines ==="
+          grep -m 40 -E "error:" build.log || echo "(no error: lines found in build.log)"
+          while IFS= read -r line; do
+            msg=$(echo "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g')
+            echo "::error::${msg}"
+          done < <(grep -m 40 -E "error:" build.log || true)
 
       - name: Package unsigned .ipa
         working-directory: ios

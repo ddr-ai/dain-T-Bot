@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import type { Performance, Position, Settings, Status, SymbolTick } from '../types.ts'
-import { api } from '../api.ts'
 import { fmtPct, fmtPrice, fmtQty, fmtSignedUsd, fmtTime, fmtUsd, pnlClass } from '../format.ts'
 import { Sparkline } from './Sparkline.tsx'
 
