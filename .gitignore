@@ -1,0 +1,23 @@
+# Secrets - NEVER commit
+.env
+*.key
+
+# Runtime data
+backend/data/
+data/
+*.log
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# iOS / Xcode
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+.DS_Store
+
+# PWA build output
+pwa/dist/

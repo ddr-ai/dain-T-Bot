@@ -1,0 +1,18 @@
+{
+  "name": "gemini-autopilot-backend",
+  "version": "1.0.0",
+  "description": "Fully autonomous spot trading bot for Gemini (paper + live) with hard risk guards",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "start": "node --experimental-transform-types --no-warnings src/index.ts",
+    "dev": "node --watch --experimental-transform-types --no-warnings src/index.ts",
+    "test": "node --test --experimental-transform-types --no-warnings test/*.test.ts",
+    "backtest": "node --experimental-transform-types --no-warnings src/cli/backtest.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
