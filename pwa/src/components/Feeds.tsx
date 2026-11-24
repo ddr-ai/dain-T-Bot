@@ -49,7 +49,7 @@ export function TradesList(props: { trades: Trade[] }): JSX.Element {
                   {t.symbol.toUpperCase()} <span className="muted small">({t.kind})</span>
                 </div>
                 <div className="muted small">
-                  {fmtQty(t.qty)} in @ {fmtPrice(t.entry)} -> {t.exit === null ? 'open' : 'out @ ' + fmtPrice(t.exit)}
+                  {fmtQty(t.qty)} in @ {fmtPrice(t.entry)} {'->'} {t.exit === null ? 'open' : 'out @ ' + fmtPrice(t.exit)}
                 </div>
               </div>
               <div className={'right ' + pnlClass(t.pnlUsd)}>
