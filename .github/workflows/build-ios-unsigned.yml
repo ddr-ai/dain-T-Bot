@@ -1,0 +1,54 @@
+# Builds the iOS app as an UNSIGNED .ipa for sideloading with esign.
+# No certificates, no provisioning profiles, no p12 - you sign it yourself.
+name: Build unsigned iOS IPA
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: xcodegen + xcodebuild (unsigned)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build (no code signing)
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -project AutopilotTrader.xcodeproj \
+            -scheme AutopilotTrader \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            -destination 'generic/platform=iOS' \
+            build
+
+      - name: Package unsigned .ipa
+        working-directory: ios
+        run: |
+          mkdir -p build/Payload
+          cp -R "build/Build/Products/Release-iphoneos/AutopilotTrader.app" build/Payload/
+          cd build
+          zip -r "AutopilotTrader-unsigned.ipa" Payload
+          ls -la AutopilotTrader-unsigned.ipa
+
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutopilotTrader-unsigned-ipa
+          path: ios/build/AutopilotTrader-unsigned.ipa
+          retention-days: 30
