@@ -29,7 +29,7 @@ jobs:
         run: cd backend && npm run backtest -- --symbol btcusd
 
   pwa-build:
-    name: PWA typecheck + build (+ publish dist branch on main)
+    name: PWA typecheck + build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -39,30 +39,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      # No npm cache on purpose: the repo ships no package-lock.json
-      # (the project is built from a clean npm install every time).
       - name: Install dependencies
         run: npm install --no-fund --no-audit
       - name: Typecheck + build
         run: npm run build
-      - name: Publish built dist to the 'dist' branch (static site source)
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        working-directory: pwa
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cd dist
-          git init -b dist .
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "pwa dist from CI [skip ci]" >/dev/null
-          if ! git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" dist:dist 2> push.err; then
-            echo "::error::dist push failed:"
-            while IFS= read -r line; do
-              msg=$(echo "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
-              echo "::error::${msg}"
-            done < push.err
-            cat push.err >> "$GITHUB_STEP_SUMMARY" || true
-            exit 1
-          fi
