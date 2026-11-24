@@ -10,8 +10,8 @@ jobs:
     name: Backend unit tests (zero-dependency Node)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Run tests (no npm install needed - Node stdlib only)
@@ -21,25 +21,35 @@ jobs:
     name: Backtest CLI smoke test (live public data)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Run walk-forward backtest on public candles
         run: cd backend && npm run backtest -- --symbol btcusd
 
   pwa-build:
-    name: PWA typecheck + build
+    name: PWA typecheck + build (+ publish dist branch on main)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: pwa
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: pwa/package-lock.json
-      - run: npm install --no-frozen-lockfile
-      - run: npm run build
+          node-version: 22
+      # No npm cache on purpose: the repo ships no package-lock.json
+      # (the project is built from a clean npm install every time).
+      - name: Install dependencies
+        run: npm install --no-fund --no-audit
+      - name: Typecheck + build
+        run: npm run build
+      - name: Publish built dist to the 'dist' branch (static site source)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: pwa/dist
+          branch: dist
+          clean: true
+          commit-message: 'pwa dist from CI [skip ci]'

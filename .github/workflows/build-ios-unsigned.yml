@@ -11,9 +11,9 @@ on:
 jobs:
   build:
     name: xcodegen + xcodebuild (unsigned)
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install xcodegen
         run: brew install xcodegen
