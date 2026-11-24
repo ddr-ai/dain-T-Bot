@@ -35,7 +35,7 @@ struct DashboardView: View {
             .task {
                 if let st = state.settings { sliderValue = st.riskReward }
             }
-            .onChange(of: state.settings?.riskReward ?? 0) { _, v in sliderValue = v }
+            .onChange(of: state.settings?.riskReward ?? 0) { v in sliderValue = v }
         }
         .overlay(alignment: .top) {
             if let toast = state.toast {
@@ -256,6 +256,6 @@ struct PositionRow: View {
 
     private var entryLine: String {
         let qty = String(format: "%.6g", p.remainingQty)
-        return "\(qty) @ \(p.entry, specifier: "%.2f")"
+        return String(format: "%@ @ %.2f", qty, p.entry)
     }
 }

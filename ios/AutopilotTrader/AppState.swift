@@ -207,7 +207,8 @@ final class AppState: ObservableObject {
            let p = payload as? [String: Any],
            let symbol = p["symbol"] as? String,
            let price = p["price"] as? Double {
-            if status != nil, var prices = status!.prices {
+            if status != nil {
+                var prices = status!.prices
                 prices[symbol] = APITick(price: price, at: Date().timeIntervalSince1970 * 1000)
                 status!.prices = prices
             }

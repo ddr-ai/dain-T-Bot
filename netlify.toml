@@ -8,3 +8,22 @@
 
 [build.environment]
   NODE_VERSION = "22"
+
+# Correct content type for the PWA manifest (Chrome installability check).
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json"
+
+# Service worker must always be revalidated so updates propagate quickly.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Hashed, immutable Vite assets can be cached hard.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
