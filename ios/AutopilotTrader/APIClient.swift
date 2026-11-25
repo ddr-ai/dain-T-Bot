@@ -80,6 +80,16 @@ final class APIClient {
         _ = try await post("api/autopilot", body: ["enabled": on])
     }
 
+    // Hosted run-window flow: START a run for N minutes (1h..7d), or STOP new
+    // entries (open positions keep being managed until they close).
+    func startRun(minutes: Int) async throws {
+        _ = try await post("api/run", body: ["minutes": minutes])
+    }
+
+    func stopRun() async throws {
+        _ = try await post("api/autopilot", body: ["enabled": false])
+    }
+
     func updateSettings(_ patch: [String: Any]) async throws {
         _ = try await put("api/settings", body: patch)
     }

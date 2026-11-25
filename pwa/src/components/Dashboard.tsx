@@ -10,12 +10,26 @@ interface DashboardProps {
   onToggleAutopilot: (on: boolean) => void
   onRiskSlider: (v: number) => void
   onEmergencyStop: () => void
+  onStartRun: (minutes: number) => void
+  onStopRun: () => void
   connected: boolean
 }
+
+const RUN_OPTIONS: Array<{ minutes: number, label: string }> = [
+  { minutes: 60, label: '1h' },
+  { minutes: 180, label: '3h' },
+  { minutes: 360, label: '6h' },
+  { minutes: 720, label: '12h' },
+  { minutes: 1440, label: '24h' },
+  { minutes: 4320, label: '3d' },
+  { minutes: 10080, label: '7d' }
+]
 
 export function Dashboard(props: DashboardProps): JSX.Element {
   const { status } = props
   const [confirmStop, setConfirmStop] = useState(false)
+  const [runMinutes, setRunMinutes] = useState(1440)
+  const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
     if (!confirmStop) return
@@ -23,22 +37,40 @@ export function Dashboard(props: DashboardProps): JSX.Element {
     return () => clearTimeout(t)
   }, [confirmStop])
 
+  // 1s local countdown anchored on the server-provided runEndsAt
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+
   const positions = status.positions
   const bitmap = props.settings
+  const runActive = (status.runActive ?? false) && status.autopilotOn
+  const endsAt = status.runEndsAt ?? 0
+  const remainingMs = endsAt > 0 ? Math.max(0, endsAt - now) : 0
+  const h = Math.floor(remainingMs / 3600000)
+  const m = Math.floor((remainingMs % 3600000) / 60000)
+  const sec = Math.floor((remainingMs % 60000) / 1000)
+  const countdown = h > 0
+    ? String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0')
+    : String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0')
 
   const statusLine = (): string => {
-    if (status.guardLock !== undefined && status.guardLock) return 'Circuit breaker tripped - manual reset needed'
+    if (status.guardLock !== undefined && status.guardLock) return 'Circuit breaker tripped - a fresh RUN resets it'
     if (status.haltNew) return 'New entries paused today (' + status.haltReason + '); positions still managed'
-    if (!status.autopilotOn) return 'Autopilot: Off'
-    if (status.stalePrices !== undefined && status.stalePrices.length > 0) return 'Autopilot: scanning paused (stale prices: ' + status.stalePrices.join(', ') + ')'
-    if (positions.length > 0) return 'Autopilot: managing ' + positions.length + ' open position' + (positions.length > 1 ? 's' : '') + ', scanning for more'
-    return 'Autopilot: scanning for setups...'
+    if (!status.autopilotOn) return 'Run stopped - open positions keep being managed until they close'
+    if (status.stalePrices !== undefined && status.stalePrices.length > 0) return 'scanning paused (stale prices: ' + status.stalePrices.join(', ') + ')'
+    if (positions.length > 0) return 'Managing ' + positions.length + ' open position' + (positions.length > 1 ? 's' : '') + ', scanning for more'
+    return 'Scanning for setups...'
   }
 
   return (
     <div className="page">
       <div className={'badge ' + (status.mode === 'live' ? 'live' : 'paper')}>{status.mode === 'live' ? 'LIVE MODE' : 'PAPER MODE'}</div>
-      <div className={'badge ' + (props.connected ? 'ok' : 'bad')}>{props.connected ? 'WS connected' : 'offline / reconnecting'}</div>
+      <div className={'badge ' + (props.connected ? 'ok' : 'bad')}>{props.connected ? 'WS connected' : 'polling every 12s'}</div>
+      {status.hasCredentials
+        ? <div className="badge ok">Gemini key saved</div>
+        : <div className="badge bad">no Gemini key - add it in Settings</div>}
 
       <section className="card autopilot">
         <div className="row spread">
@@ -49,6 +81,43 @@ export function Dashboard(props: DashboardProps): JSX.Element {
           <button className={'toggle ' + (status.autopilotOn ? 'on' : '')} onClick={() => props.onToggleAutopilot(!status.autopilotOn)} aria-label="toggle autopilot">
             <span className="knob" />
           </button>
+        </div>
+      </section>
+
+      <section className="card autopilot">
+        <div className="h2">Run window</div>
+        {runActive
+          ? (
+            <div className="runclock">
+              <div className={'big countdown ' + pnlClass(1)}>{countdown}</div>
+              <div className="muted small">
+                remaining ({RUN_OPTIONS.find((o) => o.minutes === (status.runMinutes ?? runMinutes))?.label ?? Math.round((status.runMinutes ?? runMinutes) / 60) + 'h'} run)
+              </div>
+            </div>
+            )
+          : (
+            <div className="chips">
+              {RUN_OPTIONS.map((o) => (
+                <button
+                  key={o.minutes}
+                  className={'chip ' + (runMinutes === o.minutes ? 'active' : '')}
+                  onClick={() => setRunMinutes(o.minutes)}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            )}
+        <button
+          className={'big-btn ' + (runActive ? 'danger' : 'go')}
+          onClick={() => (runActive ? props.onStopRun() : props.onStartRun(runMinutes))}
+        >
+          {runActive ? 'STOP RUN' : 'START RUN'}
+        </button>
+        <div className="muted small">
+          {runActive
+            ? 'STOP ends new entries; open positions keep being managed until they close.'
+            : 'START runs the engine on the server for the chosen window. You can close this page.'}
         </div>
       </section>
 
@@ -189,7 +258,7 @@ export function Watchlist(props: { prices: Record<string, SymbolTick> }): JSX.El
           </div>
         ))}
       </div>
-      <div className="muted small">Prices stream live over WebSocket from Gemini market data.</div>
+      <div className="muted small">Prices refresh from the hosted engine (12s polling + live feed when connected).</div>
     </div>
   )
 }

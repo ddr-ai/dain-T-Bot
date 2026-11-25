@@ -105,6 +105,27 @@ export default function App(): JSX.Element {
     )
   }
 
+  // Run-window flow: START a hosted run for N minutes, or STOP new entries.
+  const startRun = (minutes: number): void => {
+    api.startRun(minutes).then(
+      () => {
+        notify('RUN STARTED for ' + (minutes / 60) + 'h - the engine runs on the server, you can close this page')
+        refreshAll()
+      },
+      (e) => notify('Start failed: ' + String((e as Error).message), true)
+    )
+  }
+
+  const stopRun = (): void => {
+    api.stopRun().then(
+      () => {
+        notify('Run stopped - open positions keep being managed until they close')
+        refreshAll()
+      },
+      (e) => notify('Stop failed: ' + String((e as Error).message), true)
+    )
+  }
+
   if (status === null || settings === null) {
     return (
       <div className="boot">
@@ -127,6 +148,8 @@ export default function App(): JSX.Element {
           onToggleAutopilot={toggleAutopilot}
           onRiskSlider={riskSlider}
           onEmergencyStop={emergencyStop}
+          onStartRun={startRun}
+          onStopRun={stopRun}
         />
       )}
       {tab === 'watchlist' && <Watchlist prices={prices} />}

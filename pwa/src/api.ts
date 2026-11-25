@@ -38,6 +38,11 @@ export const api = {
   correlations: (): Promise<Record<string, number>> => j('/api/correlations'),
   setAutopilot: (enabled: boolean) =>
     j('/api/autopilot', { method: 'POST', body: JSON.stringify({ enabled }) }),
+  // Run-window flow: START a run for N minutes (60..10080); STOP ends new
+  // entries while open positions keep being managed.
+  startRun: (minutes: number) =>
+    j('/api/run', { method: 'POST', body: JSON.stringify({ minutes }) }),
+  stopRun: () => j('/api/autopilot', { method: 'POST', body: JSON.stringify({ enabled: false }) }),
   updateSettings: (patch: Record<string, unknown>) =>
     j('/api/settings', { method: 'PUT', body: JSON.stringify(patch) }),
   saveCredentials: (key: string, secret: string) =>

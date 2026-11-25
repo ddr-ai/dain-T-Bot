@@ -41,6 +41,13 @@ export interface Status {
   stalePrices: string[]
   positions: Position[]
   prices: Record<string, SymbolTick>
+  // Run-window flow (hosted engine)
+  lastTickAt?: number
+  runActive?: boolean
+  runStartedAt?: number
+  runEndsAt?: number
+  runMinutes?: number
+  runRemainingMs?: number
 }
 
 export interface Activity {
@@ -94,6 +101,7 @@ export interface Settings {
   riskRewardMax?: number
   maxRiskPct?: number
   symbols?: string[]
+  runMinutes?: number
 }
 
 export interface Performance {

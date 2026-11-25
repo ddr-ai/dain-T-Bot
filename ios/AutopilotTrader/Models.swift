@@ -16,9 +16,16 @@ struct APIStatus: Codable {
     var haltReason: String?
     var guardLock: Bool
     var lastScanAt: Double
+    var lastTickAt: Double?
     var stalePrices: [String]
     var positions: [APIPosition]
     var prices: [String: APITick]
+    // Run-window flow (hosted engine). Optional so older backends still decode.
+    var runActive: Bool?
+    var runStartedAt: Double?
+    var runEndsAt: Double?
+    var runMinutes: Int?
+    var runRemainingMs: Double?
 }
 
 struct APITick: Codable {
@@ -57,6 +64,7 @@ struct APISettings: Codable {
     var riskRewardMin: Double?
     var riskRewardMax: Double?
     var maxRiskPct: Double?
+    var runMinutes: Int?
 }
 
 struct APIActivity: Codable, Identifiable {

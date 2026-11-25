@@ -86,6 +86,26 @@ final class AppState: ObservableObject {
         await loadOnce()
     }
 
+    // MARK: run-window flow (hosted engine)
+    func startRun(minutes: Int) async {
+        guard let c = ensureClient() else { return }
+        do {
+            try await c.startRun(minutes: minutes)
+            let h = Double(minutes) / 60
+            showToast(String(format: "RUN STARTED for %.1f hours - live autopilot running on the server", h))
+        } catch { showToast("Start failed: " + error.localizedDescription) }
+        await loadOnce()
+    }
+
+    func stopRun() async {
+        guard let c = ensureClient() else { return }
+        do {
+            try await c.stopRun()
+            showToast("Run stopped. Open positions keep being managed until they close.")
+        } catch { showToast("Stop failed: " + error.localizedDescription) }
+        await loadOnce()
+    }
+
     func setRiskReward(_ v: Double) async {
         settings?.riskReward = v
         guard let c = ensureClient() else { return }
@@ -147,18 +167,38 @@ final class AppState: ObservableObject {
     }
 
     // MARK: websocket
+    private var wsFailures = 0
+    private var wsReconnectTask: Task<Void, Never>?
+
     func connectWebSocket() {
         guard let base = URL(string: backendURL) else { return }
         var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)!
         comps.scheme = comps.scheme == "https" ? "wss" : "ws"
         comps.path = "/ws"
         guard let wsURL = comps.url else { return }
+        wsReconnectTask?.cancel()
         let task = URLSession.shared.webSocketTask(with: wsURL)
         wsTask = task
         task.resume()
         wsConnected = true
+        wsFailures = 0
         receiveLoop()
         startHeartbeat()
+    }
+
+    // Reconnect with capped backoff: 2s -> 5s -> 12s -> 30s, stops after 5
+    // straight failures (REST polling keeps the dashboard fresh anyway).
+    private func scheduleWSReconnect() {
+        guard wsReconnectTask == nil else { return }
+        wsReconnectTask = Task { [weak self] in
+            guard let self = self else { return }
+            self.wsFailures += 1
+            guard self.wsFailures <= 5 else { self.wsConnected = false; self.wsReconnectTask = nil; return }
+            let delays: [UInt64] = [2, 5, 12, 30, 30]
+            try? await Task.sleep(nanoseconds: delays[min(self.wsFailures - 1, 4)] * 1_000_000_000)
+            self.wsReconnectTask = nil
+            if !Task.isCancelled && self.hasBackend { self.connectWebSocket() }
+        }
     }
 
     private func receiveLoop() {
@@ -168,8 +208,7 @@ final class AppState: ObservableObject {
             case .failure:
                 Task { @MainActor in
                     self.wsConnected = false
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    if self.hasBackend { self.connectWebSocket() }
+                    self.scheduleWSReconnect()
                 }
             case .success(let message):
                 Task { @MainActor in

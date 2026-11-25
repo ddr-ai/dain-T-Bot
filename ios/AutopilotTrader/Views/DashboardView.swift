@@ -5,6 +5,12 @@ struct DashboardView: View {
     @EnvironmentObject var state: AppState
     @State private var confirmStop = false
     @State private var sliderValue: Double = 1.5
+    @State private var runMinutes: Int = 1440
+
+    private let durationOptions: [(Int, String)] = [
+        (60, "1 hour"), (180, "3 hours"), (360, "6 hours"), (720, "12 hours"),
+        (1440, "24 hours"), (4320, "3 days"), (10080, "7 days")
+    ]
 
     var body: some View {
         NavigationStack {
@@ -12,13 +18,14 @@ struct DashboardView: View {
                 VStack(spacing: 14) {
                     if let s = state.status {
                         header(s)
+                        runControl(s)
                         statCards(s)
                         riskSlider(s)
                         positionsSection(s)
                         performanceSection
                         emergencyButton
                     } else {
-                        ProgressView("Connecting to backend...")
+                        ProgressView("Connecting to engine...")
                     }
                 }
                 .padding()
@@ -60,24 +67,38 @@ struct DashboardView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Toggle("", isOn: Binding(
-                    get: { s.autopilotOn },
-                    set: { _ in Task { await state.toggleAutopilot() } }
-                ))
-                .labelsHidden()
-                .tint(.green)
-            }
-            HStack(spacing: 8) {
                 Text(s.mode == "live" ? "LIVE MODE" : "PAPER MODE")
                     .font(.caption.bold())
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background((s.mode == "live" ? Color.red : Color.cyan).opacity(0.2), in: Capsule())
                     .foregroundStyle(s.mode == "live" ? .red : .cyan)
-                Text(state.wsConnected ? "live feed" : "offline")
+            }
+            HStack(spacing: 8) {
+                Text(state.wsConnected ? "live feed" : "polling")
                     .font(.caption.bold())
-                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
                     .background((state.wsConnected ? Color.green : Color.orange).opacity(0.2), in: Capsule())
                     .foregroundStyle(state.wsConnected ? .green : .orange)
+                if s.hasCredentials {
+                    Text("Gemini key saved")
+                        .font(.caption.bold())
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(Color.green.opacity(0.2), in: Capsule())
+                        .foregroundStyle(.green)
+                } else {
+                    Text("no Gemini key")
+                        .font(.caption.bold())
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(Color.orange.opacity(0.2), in: Capsule())
+                        .foregroundStyle(.orange)
+                }
+                if s.runActive == true, let ends = s.runEndsAt, ends > 0 {
+                    Text("ends " + Self.hm.string(from: Date(timeIntervalSince1970: ends / 1000)))
+                        .font(.caption.bold())
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(Color.cyan.opacity(0.2), in: Capsule())
+                        .foregroundStyle(.cyan)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -85,8 +106,87 @@ struct DashboardView: View {
         .background(RoundedRectangle(cornerRadius: 16).fill(s.autopilotOn ? Color.green.opacity(0.08) : Color(.secondarySystemBackground)))
     }
 
+    // The headline control: pick a duration, START the run, watch the
+    // countdown, STOP it whenever you like. The engine keeps running on the
+    // server even with the app closed.
+    private func runControl(_ s: APIStatus) -> some View {
+        let active = (s.runActive ?? false) && s.autopilotOn
+        return VStack(spacing: 12) {
+            if active {
+                VStack(spacing: 4) {
+                    Text(Self.runCountdown(s))
+                        .font(.system(size: 34, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.green)
+                    Text("remaining in run of " + Self.humanDuration(s.runMinutes ?? runMinutes))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                Menu {
+                    ForEach(durationOptions, id: \.0) { mins, label in
+                        Button {
+                            runMinutes = mins
+                        } label: {
+                            if runMinutes == mins { Label(label, systemImage: "checkmark") } else { Text(label) }
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "clock")
+                        Text("Run for: " + Self.humanDuration(runMinutes))
+                        Image(systemName: "chevron.up.chevron.down")
+                    }
+                    .font(.subheadline.bold())
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                }
+            }
+
+            Button {
+                Task {
+                    if active { await state.stopRun() } else { await state.startRun(minutes: runMinutes) }
+                }
+            } label: {
+                Text(active ? "STOP RUN" : "START RUN")
+                    .font(.title3.bold())
+                    .frame(maxWidth: .infinity, minHeight: 54)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(active ? .red : .green)
+            Text(active
+                 ? "Tapping STOP ends new entries; open positions keep being managed until they close."
+                 : "START runs the engine on the server for the chosen window. You can close the app.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemBackground)))
+    }
+
+    private static let hm: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    private static func humanDuration(_ minutes: Int) -> String {
+        durationOptions.first(where: { $0.0 == minutes })?.1 ?? "\(minutes / 60) hours"
+    }
+
+    private static func runCountdown(_ s: APIStatus) -> String {
+        let ms = max(0, Int(s.runRemainingMs ?? 0))
+        let h = ms / 3_600_000
+        let m = (ms % 3_600_000) / 60_000
+        let sec = (ms % 60_000) / 1000
+        if h > 0 { return String(format: "%02d:%02d:%02d", h, m, sec) }
+        if m > 0 { return String(format: "%02d:%02d", m, sec) }
+        return String(format: "%02ds", sec)
+    }
+
     private func statusLine(_ s: APIStatus) -> String {
-        if s.guardLock { return "Circuit breaker tripped - turn Autopilot ON to reset" }
+        if s.guardLock { return "Circuit breaker tripped - a fresh RUN resets it" }
         if s.haltNew { return "New entries paused today (\(s.haltReason ?? "")); positions managed" }
         if !s.autopilotOn { return "Off - scanning paused" }
         if !s.stalePrices.isEmpty { return "Scanning paused - stale prices: \(s.stalePrices.joined(separator: ", "))" }

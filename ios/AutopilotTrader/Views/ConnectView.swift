@@ -12,9 +12,9 @@ struct ConnectView: View {
                 .foregroundStyle(.cyan)
             Text("Crypto Autopilot")
                 .font(.largeTitle.bold())
-            Text("Connect to your bot backend")
+            Text("Connect to the hosted engine (prefilled) or your own server")
                 .foregroundStyle(.secondary)
-            TextField("https://your-server.example.com", text: $url)
+            TextField("https://dain-t-bot.netlify.app", text: $url)
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -42,6 +42,14 @@ struct ConnectView: View {
                 .padding(.horizontal)
         }
         .padding()
-        .onAppear { url = state.backendURL }
+        .onAppear {
+            // Default to the hosted engine so connecting is one tap.
+            if state.backendURL.isEmpty {
+                url = "https://dain-t-bot.netlify.app"
+            } else {
+                url = state.backendURL
+            }
+            token = state.token
+        }
     }
 }
