@@ -13,6 +13,8 @@ export default function App(): JSX.Element {
   const [tab, setTab] = useState<Tab>('dashboard')
   const [status, setStatus] = useState<Status | null>(null)
   const [settings, setSettings] = useState<Settings | null>(null)
+  const [bootError, setBootError] = useState<string | null>(null)
+  const [tokenInput, setTokenInput] = useState('')
   const [perf, setPerf] = useState<Performance | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [activity, setActivity] = useState<Activity[]>([])
@@ -28,7 +30,13 @@ export default function App(): JSX.Element {
   }, [])
 
   const refreshAll = useCallback((): void => {
-    api.status().then(setStatus).catch(() => undefined)
+    api.status().then((s) => { setStatus(s); setBootError(null) }).catch((e) => {
+      const msg = String((e as Error).message)
+      // the API 401 body says: missing or invalid Authorization bearer token
+      setBootError(msg.includes('missing or invalid')
+        ? 'API token required - paste it below'
+        : 'cannot reach the engine: ' + msg)
+    })
     api.settings().then(setSettings).catch(() => undefined)
     api.performance().then(setPerf).catch(() => undefined)
     api.trades(50).then(setTrades).catch(() => undefined)
@@ -130,7 +138,29 @@ export default function App(): JSX.Element {
     return (
       <div className="boot">
         <div className="h1">Crypto Autopilot</div>
-        <div className="muted">connecting to the backend...</div>
+        {bootError === null
+          ? <div className="muted">connecting to the engine...</div>
+          : (
+            <div>
+              <div className="muted err-text">{bootError}</div>
+              <input
+                className="input"
+                type="password"
+                placeholder="API token"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+              />
+              <button
+                className="primary big-btn"
+                onClick={() => { api.setToken(tokenInput); refreshAll() }}
+              >
+                Connect
+              </button>
+              <div className="muted small" style={{ marginTop: 10 }}>
+                The token was shared with you. It is stored only on this device.
+              </div>
+            </div>
+            )}
       </div>
     )
   }

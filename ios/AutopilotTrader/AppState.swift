@@ -37,6 +37,26 @@ final class AppState: ObservableObject {
         refreshAll()
     }
 
+    // Return to the Connect screen (used when the saved token is rejected
+    // or the server is unreachable): clears the saved URL + token and all
+    // in-memory state so AutopilotApp renders ConnectView again.
+    func forgetConnection() {
+        AppSettings.backendURL = ""
+        AppSettings.token = ""
+        backendURL = ""
+        token = ""
+        client = nil
+        status = nil
+        settings = nil
+        perf = nil
+        activity = []
+        trades = []
+        lastError = nil
+        wsTask?.cancel(with: .goingAway, reason: nil)
+        wsTask = nil
+        wsConnected = false
+    }
+
     private func ensureClient() -> APIClient? {
         if client === nil { client = makeClient() }
         return client

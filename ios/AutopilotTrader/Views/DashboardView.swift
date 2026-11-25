@@ -25,7 +25,32 @@ struct DashboardView: View {
                         performanceSection
                         emergencyButton
                     } else {
-                        ProgressView("Connecting to engine...")
+                        VStack(spacing: 14) {
+                            ProgressView("Connecting to engine...")
+                            if let err = state.lastError {
+                                Text(err)
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
+                                    .multilineTextAlignment(.center)
+                                if err.lowercased().contains("token") {
+                                    Text("The engine requires the API bearer token. Tap below to re-enter it.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.center)
+                                }
+                                Button("Reconnect now") {
+                                    Task { await state.refreshAll() }
+                                }
+                                Button("Change server / token") {
+                                    state.forgetConnection()
+                                }
+                            } else {
+                                Text("First connect can take a few seconds...")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.horizontal)
                     }
                 }
                 .padding()
