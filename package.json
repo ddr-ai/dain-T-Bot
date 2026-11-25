@@ -1,0 +1,9 @@
+{
+  "name": "dain-t-bot",
+  "private": true,
+  "type": "module",
+  "description": "Hosted engine (Netlify Functions + Blobs) for the dain-T-Bot autopilot. The PWA in ./pwa and the REST API in ./netlify deploy together as one site.",
+  "dependencies": {
+    "@netlify/blobs": "^7.5.0"
+  }
+}

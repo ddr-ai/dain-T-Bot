@@ -1,13 +1,18 @@
-# Netlify build configuration for the PWA (mobile-first React dashboard).
-# The backend (Node engine) runs on your own host/Docker; only the static
-# frontend is served here. Set VITE_API_BASE as a Netlify env var if the
-# backend lives on another origin (e.g. https://api.yourdomain.com).
+# Netlify build configuration: ONE site serves the mobile-first React PWA and
+# hosts the serverless trading engine (Netlify Functions in ./netlify/functions
+# with state in Netlify Blobs). The API lives at https://<site>/api/... and the
+# scheduled function in netlify/functions/engine.ts ticks the engine every
+# minute. The PWA talks to it same-origin (VITE_API_BASE unset).
 [build]
-  command = "cd pwa && npm install --no-fund --no-audit && npm run build"
+  command = "npm install --no-fund --no-audit && cd pwa && npm install --no-fund --no-audit && npm run build"
   publish = "pwa/dist"
+  functions = "netlify/functions"
 
 [build.environment]
   NODE_VERSION = "22"
+
+[functions]
+  node_bundler = "esbuild"
 
 # Correct content type for the PWA manifest (Chrome installability check).
 [[headers]]
