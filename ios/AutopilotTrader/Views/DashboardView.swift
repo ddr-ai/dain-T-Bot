@@ -124,7 +124,7 @@ struct DashboardView: View {
                 .frame(maxWidth: .infinity)
             } else {
                 Menu {
-                    ForEach(durationOptions, id: \.0) { mins, label in
+                    ForEach(Self.durationOptions, id: \.0) { mins, label in
                         Button {
                             runMinutes = mins
                         } label: {
