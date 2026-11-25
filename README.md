@@ -29,6 +29,29 @@ in paper mode and read docs/VALIDATION.md before going live.
     .github/workflows/      CI, unsigned .ipa build (esign-ready)
     docs/                   setup, sideload, validation, strategy, deployment
 
+## Quick start - HOSTED ENGINE (recommended, zero setup)
+
+The engine is deployed as Netlify Functions + Blobs (state survives in a
+private blob store, a scheduled function ticks it every minute even with no
+app open). The PWA and the API live on one site:
+
+    https://dain-t-bot.netlify.app
+
+1. Open the URL, go to Settings, paste the API_AUTH_TOKEN (shared privately),
+   and save your Gemini key (Balances + Orders only). Both are AES-256-GCM
+   encrypted with CREDS_MASTER_KEY before they touch storage.
+2. On the dashboard pick a run window (1h .. 7d) and press START RUN.
+   Live mode is the default; toggle Settings -> Paper to simulate instead.
+3. When the window ends (or you press STOP RUN), new entries stop but open
+   positions keep being managed until stops/targets close them.
+   EMERGENCY STOP ALL flattens immediately at market.
+
+The iOS app connects to the same URL: paste it on the Connect screen (it is
+pre-filled) plus the same API_AUTH_TOKEN. The hosted engine and the
+standalone backend speak the identical REST contract, so either can be
+swapped in at any time. netlify/smoke.ts runs an offline-ish local test of
+the serverless tick with a stub for @netlify/blobs.
+
 ## Quick start - backend (paper mode, no key needed)
 
 Requires Node 22.6 or newer (TypeScript runs natively; no npm install).

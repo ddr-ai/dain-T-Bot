@@ -7,7 +7,7 @@ struct DashboardView: View {
     @State private var sliderValue: Double = 1.5
     @State private var runMinutes: Int = 1440
 
-    private let durationOptions: [(Int, String)] = [
+    private static let durationOptions: [(Int, String)] = [
         (60, "1 hour"), (180, "3 hours"), (360, "6 hours"), (720, "12 hours"),
         (1440, "24 hours"), (4320, "3 days"), (10080, "7 days")
     ]

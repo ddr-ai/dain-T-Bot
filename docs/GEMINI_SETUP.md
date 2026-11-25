@@ -33,6 +33,13 @@ placement, stop-limit orders, cancellations) with play money.
 
 ## 3. Put the key in the backend
 
+HOSTED ENGINE (https://dain-t-bot.netlify.app): open Settings in the PWA or
+iOS app, paste the key + secret there. They are stored AES-256-GCM encrypted
+in the site's private Netlify Blobs, sealed with the CREDS_MASTER_KEY
+environment variable. No .env, no server to run.
+
+Standalone backend:
+
 Preferred (encrypted at rest):
 
 - Open Settings in the app and paste the key + secret. They are stored
