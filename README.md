@@ -90,8 +90,9 @@ API responses for offline viewing.
 
 ## What the bot does automatically
 
-Setup detection (1-minute momentum / dip-buy: 5m+1m trend alignment, 8-bar
-momentum breaks or EMA21 dip-buys, RSI + volume confirmation),
+Setup detection (5-minute session opening-range / ORB per Zarattini & Aziz
+2023: first 5m candle direction at the UTC session open, range-low stop,
+10R target, flat by session close),
 volatility regime filtering, order-book liquidity checks, time filters,
 position sizing, entry (post-only maker), stop-loss + take-profit placement
 on-exchange, OCO emulation, breakeven moves, ATR trailing, optional partial

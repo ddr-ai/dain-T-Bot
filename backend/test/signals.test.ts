@@ -4,35 +4,39 @@ import type { Candle } from '../src/gemini/types.ts'
 import { atrRankOK, correlationOf, correlationOK, liquidityOK, timeWindowOK } from '../src/strategy/regime.ts'
 import { closedOnly, evaluateSetup, trendBiasEma } from '../src/strategy/signals.ts'
 
-const SIGNAL_CFG = { atrMult: 2.0, minStopPct: 0.8, volumeMult: 1.5 }
+const SIGNAL_CFG = { minStopPct: 0.8 }
 
-// Deterministic candle generator for the 1-minute method: 240 one-minute
-// candles of moderate sine "weather", then a 20-candle quiet consolidation
-// just below resistance, and finally (style=momentum) a volume-confirmed
-// breakout candle above the 8-bar range high.
-function gen1m(style: 'momentum' | 'range'): Candle[] {
+// Monday 5 January 2026, 00:00 UTC - a weekday session open.
+const MON = Date.UTC(2026, 0, 5)
+// Saturday 10 January 2026, 00:00 UTC - a weekend session open.
+const SAT = Date.UTC(2026, 0, 10)
+const FIVE_MIN = 300_000
+
+// Deterministic 5m candle generator for the session ORB method: ~a day of
+// pre-session "weather" candles for RSI/ATR context, then the session's
+// first candle (the opening range) built from the spec, plus a forming
+// second candle (dropped by closedOnly when evaluated inside the window).
+function genOrb5m(sessionStart: number, first: { o: number, h: number, l: number, c: number, v?: number }, barsAfter = 1): Candle[] {
   const out: Candle[] = []
-  for (let k = 0; k < 260; k++) {
-    if (k < 240) {
-      const amp = 0.4 + 0.2 * Math.sin(k / 17)
-      const c = 100 + 0.02 * k + 1.2 * Math.sin(k / 9)
-      const o = out.length > 0 ? out[out.length - 1].c : c - 0.1
-      out.push({ t: k * 60000, o, h: Math.max(o, c) + amp, l: Math.min(o, c) - amp, c, v: 1000 + 40 * (k % 7) })
-    } else {
-      const base = out[out.length - 1].c
-      const c = base + (k % 2 === 0 ? 0.25 : -0.25)
-      out.push({ t: k * 60000, o: base, h: Math.max(base, c) + 0.1, l: Math.min(base, c) - 0.1, c, v: 1000 })
-    }
+  const histBars = 90
+  for (let k = 0; k < histBars; k++) {
+    const t = sessionStart - (histBars - k) * FIVE_MIN
+    const c = 100 + Math.sin(k / 9) * 0.8
+    const o = out.length > 0 && out[out.length - 1].t === t - FIVE_MIN ? out[out.length - 1].c : c - 0.05
+    out.push({ t, o, h: Math.max(o, c) + 0.3, l: Math.min(o, c) - 0.3, c, v: 1000 + 30 * (k % 5) })
   }
-  if (style === 'momentum') {
-    const last = out.length - 1
-    const priorHigh = Math.max(...out.slice(last - 8, last).map((x) => x.h))
-    const cPrev = out[last - 1].c // previous close sits at the range floor by construction
-    out[last] = { t: out[last].t, o: cPrev, h: priorHigh + 0.4, l: cPrev - 0.1, c: priorHigh + 0.08, v: 3200 }
+  out.push({ t: sessionStart, o: first.o, h: first.h, l: first.l, c: first.c, v: first.v ?? 3000 })
+  let p = first.c
+  for (let k = 1; k <= barsAfter; k++) {
+    const t = sessionStart + k * FIVE_MIN
+    const c = p + 0.1
+    out.push({ t, o: p, h: Math.max(p, c) + 0.1, l: Math.min(p, c) - 0.1, c, v: 1200 })
+    p = c
   }
   return out
 }
 
+// Trend-frame generator (any frame length; trendBiasEma reads closes only).
 function gen5m(long: boolean): Candle[] {
   const out: Candle[] = []
   let p = 100
@@ -58,34 +62,67 @@ test('trendBiasEma detects rising and falling markets', () => {
   assert.equal(trendBiasEma(gen5m(false)).long, false)
 })
 
-test('evaluateSetup fires on a crafted 1m momentum break', () => {
-  const c1m = gen1m('momentum')
-  const c5m = gen5m(true)
-  const nowMs = c1m[c1m.length - 1].t + 60000 // one full frame later = closed
-  const d = evaluateSetup(c1m, c5m, nowMs, SIGNAL_CFG)
+test('evaluateSetup fires ORB long on a bullish first candle', () => {
+  const c5m = genOrb5m(MON, { o: 100, h: 101.4, l: 99.5, c: 101 })
+  const now = MON + 6 * 60_000 // 00:06 UTC, inside the [5,10) entry window
+  const d = evaluateSetup(c5m, gen5m(true), now, SIGNAL_CFG)
   assert.equal(d.enter, true)
-  assert.equal(d.kind, 'momentum')
-  assert.ok(d.rsi >= 45 && d.rsi <= 78, 'RSI should be in the momentum zone, got ' + d.rsi)
-  assert.ok(d.volumeRatio >= 1.5, 'volume should confirm, got ' + d.volumeRatio)
-  assert.ok(d.atrRank >= 0.2 && d.atrRank <= 0.9, 'ATR rank should be mid band, got ' + d.atrRank)
-  assert.ok(d.stopDist > 0)
+  assert.equal(d.kind, 'orb')
+  assert.equal(d.trendOK, true)
+  // stop at the opening-range low: 101 - 99.5 = 1.5 (above the 0.8% floor)
+  assert.ok(Math.abs(d.stopDist - 1.5) < 0.01, 'stop should sit at the range low, got ' + d.stopDist)
+  assert.ok(d.reasons[d.reasons.length - 1].includes('ORB'), 'reason trace should name the ORB trigger')
 })
 
-test('evaluateSetup rejects a quiet range without a trigger', () => {
-  const c1m = gen1m('range')
-  const c5m = gen5m(true)
-  const nowMs = c1m[c1m.length - 1].t + 60000
-  const d = evaluateSetup(c1m, c5m, nowMs, SIGNAL_CFG)
-  assert.equal(d.enter, false)
+test('evaluateSetup widens thin opening ranges to the stop floor', () => {
+  // range low only 0.2 below the close -> the 0.8% fee floor binds
+  const c5m = genOrb5m(MON, { o: 100, h: 100.5, l: 100.2, c: 100.4 })
+  const now = MON + 6 * 60_000
+  const d = evaluateSetup(c5m, gen5m(true), now, SIGNAL_CFG)
+  assert.equal(d.enter, true)
+  const expected = 100.4 * 0.008
+  assert.ok(Math.abs(d.stopDist - expected) < 0.01, 'stop should be floored at minStopPct, got ' + d.stopDist)
 })
 
-test('evaluateSetup blocks wrong-side trend', () => {
-  const c1m = gen1m('momentum')
-  const c5m = gen5m(false) // 5m downtrend
-  const nowMs = c1m[c1m.length - 1].t + 60000
-  const d = evaluateSetup(c1m, c5m, nowMs, SIGNAL_CFG)
+test('evaluateSetup rejects a bearish first candle (long-only engine)', () => {
+  const c5m = genOrb5m(MON, { o: 101, h: 101.2, l: 99.6, c: 100 })
+  const now = MON + 6 * 60_000
+  const d = evaluateSetup(c5m, gen5m(true), now, SIGNAL_CFG)
   assert.equal(d.enter, false)
-  assert.equal(d.trendOK, false)
+  assert.equal(d.kind, null)
+  assert.ok(d.reasons.some((r) => r.includes('bearish')), 'reason should say the first candle was bearish')
+})
+
+test('evaluateSetup ignores flat first candles', () => {
+  const c5m = genOrb5m(MON, { o: 100, h: 100.3, l: 99.7, c: 100 })
+  const now = MON + 6 * 60_000
+  const d = evaluateSetup(c5m, gen5m(true), now, SIGNAL_CFG)
+  assert.equal(d.enter, false)
+  assert.ok(d.reasons.some((r) => r.includes('flat')), 'reason should say the first candle was flat')
+})
+
+test('evaluateSetup waits for the opening range to finish forming', () => {
+  const c5m = genOrb5m(MON, { o: 100, h: 101.4, l: 99.5, c: 101 })
+  const now = MON + 3 * 60_000 // 00:03, first candle still forming
+  const d = evaluateSetup(c5m, gen5m(true), now, SIGNAL_CFG)
+  assert.equal(d.enter, false)
+  assert.ok(d.reasons.some((r) => r.includes('still forming')))
+})
+
+test('evaluateSetup blocks entries outside the session entry window', () => {
+  const c5m = genOrb5m(MON, { o: 100, h: 101.4, l: 99.5, c: 101 }, 10)
+  const now = MON + 45 * 60_000 // 00:45, the window closed at 00:10
+  const d = evaluateSetup(c5m, gen5m(true), now, SIGNAL_CFG)
+  assert.equal(d.enter, false)
+  assert.ok(d.reasons.some((r) => r.includes('outside session entry window')))
+})
+
+test('evaluateSetup skips weekend sessions', () => {
+  const c5m = genOrb5m(SAT, { o: 100, h: 101.4, l: 99.5, c: 101 })
+  const now = SAT + 6 * 60_000
+  const d = evaluateSetup(c5m, gen5m(true), now, SIGNAL_CFG)
+  assert.equal(d.enter, false)
+  assert.ok(d.reasons.some((r) => r.includes('weekend')))
 })
 
 test('liquidityOK flags wide spreads and thin books', () => {

@@ -4,9 +4,9 @@
 // window ends or the user taps STOP:
 //   * stop-loss + take-profit REST on the exchange (poll fills each tick)
 //   * OCO emulation: one side fills -> sibling cancelled
-//   * breakeven stop move at +1R, trailing stop at 0.5 x ATR
+//   * breakeven stop move at +1R (no trailing stop - ORB winners run)
 //   * optional partial profit at +1R
-//   * time-based exit when the 1h trend has flipped
+//   * unconditional time exit at TIME_EXIT_HOURS (session close)
 
 import { CONFIG } from './config.ts'
 import type { ServerlessState, PositionDoc, TradeDoc } from './state.ts'
@@ -96,32 +96,20 @@ async function manageOne(ctx: TickContext, pos: PositionDoc): Promise<void> {
   }
   if (pos.remainingQty <= 1e-12) return
 
-  // 4. Trailing stop once past +1R: half the entry ATR below price, but
-  //    never tighter than a quarter of the stop distance (the 1-minute
-  //    method's ATR is tiny; trailing on it alone would exit on noise).
-  if (CONFIG.trailingStop && pos.breakevenDone && rMultiple >= 1 && Number.isFinite(pos.atr)) {
-    const trailDist = Math.max(pos.atr * 0.5, pos.stopDist * 0.25)
-    const newStop = price - trailDist
-    if (newStop > pos.stop + trailDist * 0.2) {
-      const moved = await replaceStop(ctx, pos, newStop, det.tickSize, det.quoteIncrement)
-      if (moved) {
-        addActivity(st, 'stop', pos.symbol + ' trailing stop raised to ' + pos.stop.toFixed(2), pos.symbol)
-      }
-    }
-  }
+  // 4. NO trailing stop: the ORB method's edge is letting winners run to
+  //    the 10R target or the session close. Only the breakeven move above
+  //    protects the position once it reaches +1R.
 
-  // 5. Time-based exit: after TIME_EXIT_HOURS, exit if the trend flipped.
+  // 5. Time-based exit: after TIME_EXIT_HOURS (session close for the ORB
+  //    method), exit unconditionally - nothing carries into the next session.
   const ageH = (now - pos.openedAt) / 3600000
   if (ageH >= CONFIG.timeExitHours) {
-    const trend = st.trendLong[pos.symbol]
-    if (trend === false) {
-      const sold = pos.mode === 'paper'
-        ? paperSellNow(st, pos.symbol, pos.remainingQty, price, det.tickSize)
-        : ctx.creds ? await liveSellNow(ctx.creds, pos.symbol, pos.remainingQty, price, det.tickSize, det.quoteIncrement) : undefined
-      if (sold) {
-        await recordExit(ctx, pos, { kind: 'target', orderId: '', qty: sold.qty, price: sold.avgPrice, feeUsd: sold.feeUsd }, 'time exit: 1h trend flipped')
-        await cancelBoth(pos, ctx)
-      }
+    const sold = pos.mode === 'paper'
+      ? paperSellNow(st, pos.symbol, pos.remainingQty, price, det.tickSize)
+      : ctx.creds ? await liveSellNow(ctx.creds, pos.symbol, pos.remainingQty, price, det.tickSize, det.quoteIncrement) : undefined
+    if (sold) {
+      await recordExit(ctx, pos, { kind: 'target', orderId: '', qty: sold.qty, price: sold.avgPrice, feeUsd: sold.feeUsd }, 'time exit: session close (ORB)')
+      await cancelBoth(pos, ctx)
     }
   }
 }

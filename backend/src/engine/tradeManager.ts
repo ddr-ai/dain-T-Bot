@@ -1,9 +1,9 @@
 // Auto trade management: everything that happens AFTER the entry.
 //   * stop-loss + take-profit live on the exchange right after entry
 //   * OCO emulation: when one side fills the sibling is cancelled
-//   * breakeven move after +1R, trailing stop at 0.5 x ATR
+//   * breakeven move after +1R (no trailing stop - ORB winners run to target)
 //   * optional partial profit at +1R
-//   * time-based exit after TIME_EXIT_HOURS if the 1h trend has flipped
+//   * unconditional time exit at TIME_EXIT_HOURS (session close)
 // All moves are logged to the activity feed and pushed to clients.
 
 import { log } from '../util/logger.ts'
@@ -126,30 +126,18 @@ export class TradeManager {
     }
     if (pos.remainingQty <= 1e-12) return
 
-    // 4. Trailing stop once past +1R: half the entry ATR below price, but
-    //    never tighter than a quarter of the stop distance (the 1-minute
-    //    method's ATR is tiny; trailing on it alone would exit on noise).
-    if (this.d.cfg.trailingStop && pos.breakevenDone && rMultiple >= 1 && Number.isFinite(pos.atr)) {
-      const trailDist = Math.max(pos.atr * 0.5, pos.stopDist * 0.25)
-      const newStop = price - trailDist
-      if (newStop > pos.stop + trailDist * 0.2) {
-        const moved = await this.replaceStop(pos, newStop, det)
-        if (moved) {
-          this.d.store.addActivity('stop', pos.symbol + ' trailing stop raised to ' + pos.stop.toFixed(2), pos.symbol)
-        }
-      }
-    }
+    // 4. NO trailing stop: the ORB method's edge is letting winners run to
+    //    the 10R target or the session close. Only the breakeven move above
+    //    protects the position once it reaches +1R.
 
-    // 5. Time-based exit: after TIME_EXIT_HOURS, exit if the trend has flipped.
+    // 5. Time-based exit: after TIME_EXIT_HOURS (session close for the ORB
+    //    method), exit unconditionally - nothing carries into the next session.
     const ageH = (now - pos.openedAt) / 3600000
     if (ageH >= this.d.cfg.timeExitHours) {
-      const long = this.d.trendLongOf(pos.symbol)
-      if (long === false) {
-        const sold = await broker.sellNow(pos.symbol, pos.remainingQty, price, det.tickSize, det.quoteIncrement)
-        if (sold) {
-          await this.recordExit(pos, sold.qty, sold.avgPrice, sold.feeUsd, 'time exit: 1h trend flipped')
-          await this.cancelBoth(pos, broker)
-        }
+      const sold = await broker.sellNow(pos.symbol, pos.remainingQty, price, det.tickSize, det.quoteIncrement)
+      if (sold) {
+        await this.recordExit(pos, sold.qty, sold.avgPrice, sold.feeUsd, 'time exit: session close (ORB)')
+        await this.cancelBoth(pos, broker)
       }
     }
   }

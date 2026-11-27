@@ -40,8 +40,8 @@ export interface UpdateSettingsResult {
 export class Autopilot {
   private sockets = new Map<string, MarketSocket>()
   private prices = new Map<string, SymbolTick>()
-  private candles1m = new Map<string, { at: number, data: Candle[] }>()
   private candles5m = new Map<string, { at: number, data: Candle[] }>()
+  private candles30m = new Map<string, { at: number, data: Candle[] }>()
   private corr = new Map<string, number>()
   private corrAt = 0
   private trendLong = new Map<string, boolean>()
@@ -166,8 +166,8 @@ export class Autopilot {
     )
   }
 
-  private async getCandles(symbol: string, frame: '1m' | '5m'): Promise<Candle[]> {
-    const map = frame === '1m' ? this.candles1m : this.candles5m
+  private async getCandles(symbol: string, frame: '5m' | '30m'): Promise<Candle[]> {
+    const map = frame === '5m' ? this.candles5m : this.candles30m
     const hit = map.get(symbol)
     if (hit && Date.now() - hit.at < 25_000) return hit.data
     const data = await this.pub.candles(symbol, frame)
@@ -362,12 +362,10 @@ export class Autopilot {
       return
     }
 
-    const c1m = await this.getCandles(symbol, '1m')
     const c5m = await this.getCandles(symbol, '5m')
-    const decision = evaluateSetup(c1m, c5m, now, {
-      atrMult: this.cfg.atrMult,
-      minStopPct: this.cfg.minStopPct,
-      volumeMult: this.cfg.volumeMult
+    const c30m = await this.getCandles(symbol, '30m')
+    const decision = evaluateSetup(c5m, c30m, now, {
+      minStopPct: this.cfg.minStopPct
     })
     // keep trend cache fresh for time-based exits
     this.trendLong.set(symbol, decision.trendOK)
@@ -379,7 +377,7 @@ export class Autopilot {
 
     // --- signal found: run the market-quality and risk gates ---
     const tick = this.prices.get(symbol)
-    const priceNow = tick ? tick.price : (c1m[c1m.length - 1]?.c ?? 0)
+    const priceNow = tick ? tick.price : (c5m[c5m.length - 1]?.c ?? 0)
     const book = await this.pub.book(symbol)
     const liq = liquidityOK(book, this.cfg)
     if (!liq.ok) {
@@ -512,7 +510,8 @@ export class Autopilot {
     const msg = 'ENTER ' + symbol + ': bought ' + executedQty.toPrecision(6) + ' @ ' + avgEntry.toFixed(2) +
       ' (' + pos.kind + ') | stop ' + pos.stop.toFixed(2) + ' | target ' + pos.target.toFixed(2) +
       ' | risk ' + pos.riskUsd.toFixed(2) + ' USD | net RR ' + rrCheck.rrNet.toFixed(2) +
-      ' | ATR rank ' + (decision.atrRank * 100).toFixed(0) + '% | vol ' + decision.volumeRatio.toFixed(1) + 'x'
+      ' | ATR rank ' + (Number.isFinite(decision.atrRank) ? (decision.atrRank * 100).toFixed(0) + '%' : '?') +
+      ' | vol ' + (Number.isFinite(decision.volumeRatio) ? decision.volumeRatio.toFixed(1) + 'x' : '?')
     this.store.addActivity('enter', msg, symbol)
     this.events.emit('trade', { kind: 'entry', symbol, entry: avgEntry, stop: pos.stop, target: pos.target, qty: executedQty, reason: pos.kind })
     this.store.saveNow()
@@ -685,8 +684,8 @@ export class Autopilot {
   // Used by tests/tools: current closed-candle trend bias.
   async trendFresh(symbol: string): Promise<boolean | null> {
     try {
-      const c5m = await this.getCandles(symbol, '5m')
-      return trendBiasEma(closedOnly(c5m, 300_000, Date.now())).long
+      const c30m = await this.getCandles(symbol, '30m')
+      return trendBiasEma(closedOnly(c30m, 1_800_000, Date.now())).long
     } catch {
       return null
     }

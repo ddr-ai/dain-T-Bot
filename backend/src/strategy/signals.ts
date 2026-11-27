@@ -1,38 +1,37 @@
-// Rule-based entry detection - 1-MINUTE method (overwrites the old 15m/1h
-// breakout method). The first candle array is the SIGNAL frame (1 minute),
-// the second is the TREND frame (5 minutes); the frame length is inferred
-// from the candle timestamps, so the same code runs on any pair of frames.
+// Rule-based entry detection - 5-MINUTE SESSION OPENING-RANGE method,
+// implementing the "first 5-minute candle" variant of the Opening Range
+// Breakout (ORB) strategy from:
+//   Carlo Zarattini & Andrew Aziz, "Can Day Trading Really Be Profitable?"
+//   (SSRN 4416622, 2023) - QQQ backtest 2016-2023: +676% net vs +169%
+//   buy-and-hold, 24% win rate, +0.13R average per trade.
 //
-// Method:
-//   A) Trend filter: 5m EMA21 > EMA50 (macro bias) AND 1m EMA9 > EMA21
-//      (micro alignment). Both must be long.
-//   B) Volatility regime: ATR(14) on 1m candles must sit in its 20-90%
-//      percentile band - no dead chop, no panic spikes.
-//   C) Triggers on the last CLOSED 1m candle, confirmed by RSI + volume:
-//        - momentum: close breaks the prior 8-bar high, not overextended
-//          (within 1.5 ATR), volume >= volumeMult x the 20-bar average,
-//          RSI in the 45-78 momentum zone.
-//        - dip-buy: pullback that touches the 1m EMA21 from above, closes
-//          back above it, RSI 35-62, volume at least 0.7x average.
-//   D) Stop distance = max(ATR x atrMult, minStopPct% floor). At Gemini
-//      retail fees (~0.6% round trip) the floor keeps stops wide enough
-//      that the net-RR-after-fees gate can actually pass on 1m signals.
+// The paper's rule, adapted long-only for 24/7 crypto on Gemini:
+//   A) Session = UTC calendar day (00:00 UTC open - crypto's daily boundary
+//      and perp-funding settlement). Weekends are skipped (thin books).
+//   B) Trigger: the FIRST 5-minute candle of the session (00:00-00:05 UTC).
+//      Bullish close -> long at the next candle's open. Bearish or flat ->
+//      no trade (the paper also shorts; this engine is long-only by design).
+//   C) Stop loss at the LOW of the first candle, floored at MIN_STOP_PCT
+//      (fees cost ~0.64% round trip at retail rates, so sub-fee stops lose
+//      more than 1R in practice). Take-profit at RR x stop (paper: 10R).
+//   D) Time exit: everything flat before the next session (paper exits at
+//      the session close). The trade managers close positions unconditionally
+//      TIME_EXIT_HOURS after entry - no trailing stop, winners run.
 //
-// Every decision returns a full reason trace so the activity feed can say
-// exactly why the bot did (or did not) trade.
+// One trade attempt per session per symbol; the entry window is the second
+// 5-minute candle of the session (00:05-00:10 UTC) so the decision only uses
+// fully closed data. Every decision returns a full reason trace.
 
 import type { Candle } from '../gemini/types.ts'
-import { atr, ema, highestOf, lowestOf, mean, percentileRank, rsi } from './indicators.ts'
+import { atr, ema, mean, percentileRank, rsi } from './indicators.ts'
 
 export interface SignalCfg {
-  atrMult: number
   minStopPct: number
-  volumeMult: number
 }
 
 export interface SetupDecision {
   enter: boolean
-  kind: 'momentum' | 'dip-buy' | null
+  kind: 'orb' | null
   reasons: string[]
   atr: number
   stopDist: number
@@ -40,8 +39,11 @@ export interface SetupDecision {
   volumeRatio: number
   trendOK: boolean
   atrRank: number
-  trendState: number // 5m ema gap %, used for time-exit trend flip checks
+  trendState: number // 30m ema gap %, context only (the paper has no trend filter)
 }
+
+const DAY_MS = 86_400_000
+const FIVE_MIN_MS = 300_000
 
 // Drop the still-forming candle so decisions only use closed data.
 export function closedOnly(candles: Candle[], frameMs: number, nowMs: number): Candle[] {
@@ -58,10 +60,11 @@ function frameOf(candles: Candle[]): number {
     const d = candles[k].t - candles[k - 1].t
     if (d > 0) return d
   }
-  return 60_000
+  return FIVE_MIN_MS
 }
 
-// Trend bias of the TREND frame: EMA21 vs EMA50 on closes.
+// Trend bias of the TREND frame: EMA21 vs EMA50 on closes. Context only for
+// the ORB method (the paper has no trend filter) - kept for logs and tools.
 export function trendBiasEma(candlesClosed: Candle[]): { long: boolean, gapPct: number } {
   if (candlesClosed.length < 51) return { long: false, gapPct: NaN }
   const closes = candlesClosed.map((c) => c.c)
@@ -77,114 +80,99 @@ export function trendBiasEma(candlesClosed: Candle[]): { long: boolean, gapPct: 
 // Back-compat alias: the old name is referenced by tools/tests.
 export const trendBias1h = trendBiasEma
 
+function utcWeekday(sessionStartMs: number): number {
+  return new Date(sessionStartMs).getUTCDay() // 0 = Sunday, 6 = Saturday
+}
+
 export function evaluateSetup(
-  candles1m: Candle[],
   candles5m: Candle[],
+  candles30m: Candle[],
   nowMs: number,
   cfg: SignalCfg
 ): SetupDecision {
   const reasons: string[] = []
-  const c1m = closedOnly(candles1m, frameOf(candles1m), nowMs)
-  const c5m = closedOnly(candles5m, frameOf(candles5m), nowMs)
+  const c5 = closedOnly(candles5m, frameOf(candles5m), nowMs)
+  const c30 = closedOnly(candles30m, frameOf(candles30m), nowMs)
 
   const base: SetupDecision = {
     enter: false, kind: null, reasons, atr: NaN, stopDist: NaN,
     rsi: NaN, volumeRatio: NaN, trendOK: false, atrRank: NaN, trendState: NaN
   } as SetupDecision
 
-  if (c1m.length < 60) {
-    reasons.push('insufficient 1m history')
+  // A) Session = UTC calendar day; the opening range is its first candle.
+  const sessionStart = Math.floor(nowMs / DAY_MS) * DAY_MS
+  const sessionMin = (nowMs - sessionStart) / 60_000
+
+  // 30m trend context (logged, never gates the entry)
+  const t30 = trendBiasEma(c30)
+  base.trendState = Number.isFinite(t30.gapPct) ? t30.gapPct : 0
+
+  if (utcWeekday(sessionStart) === 0 || utcWeekday(sessionStart) === 6) {
+    reasons.push('weekend session skipped (thin crypto liquidity)')
     return base
   }
-  if (c5m.length < 51) {
-    reasons.push('insufficient 5m history')
+  if (sessionMin < 5) {
+    reasons.push('opening range (first 5m candle) still forming')
+    return base
+  }
+  if (sessionMin >= 10) {
+    reasons.push('outside session entry window (first 5m candle only)')
     return base
   }
 
-  // A) Multi-timeframe trend filter (5m macro + 1m micro alignment)
-  const t5 = trendBiasEma(c5m)
-  base.trendState = Number.isFinite(t5.gapPct) ? t5.gapPct : 0
-  const closes = c1m.map((x) => x.c)
-  const e9 = ema(closes, 9)
-  const e21 = ema(closes, 21)
-  const microLong = Number.isFinite(e9[e9.length - 1]) && Number.isFinite(e21[e21.length - 1]) && e9[e9.length - 1] > e21[e21.length - 1]
-  if (!(t5.long && microLong)) {
-    reasons.push('trend filter: not long-biased (5m EMA21 vs EMA50: ' + (Number.isFinite(t5.gapPct) ? t5.gapPct.toFixed(2) : '?') + '%)')
+  // B) The session's first 5m candle is the opening range.
+  let first: Candle | undefined
+  for (const c of c5) {
+    if (c.t >= sessionStart && c.t < sessionStart + FIVE_MIN_MS) {
+      first = c
+      break
+    }
+    if (c.t >= sessionStart + FIVE_MIN_MS) break // sorted data: past the range
+  }
+  if (!first) {
+    reasons.push('no first candle for this session (data gap)')
     return base
   }
-  base.trendOK = true
-  reasons.push('trend filter: long-biased on 5m + 1m EMA alignment')
 
-  const i = c1m.length - 1 // last CLOSED candle
-  const cand = c1m[i]
-  const prev = c1m[i - 1]
-  const lastEma21 = e21[e21.length - 1]
-
-  // Volume confirmation vs the trailing 20-bar average
+  // Context metrics for the log trace (the paper uses none of them as filters)
+  const i = c5.length - 1
+  const cand = c5[i]
   const volWindow: number[] = []
-  for (let k = Math.max(1, i - 20); k < i; k++) volWindow.push(c1m[k].v)
+  for (let k = Math.max(0, i - 20); k < i; k++) volWindow.push(c5[k].v)
   const avgVol = mean(volWindow)
   base.volumeRatio = avgVol > 0 ? cand.v / avgVol : 1
-
-  // RSI momentum read
+  const closes = c5.map((x) => x.c)
   const rsiSeries = rsi(closes, 14)
   base.rsi = rsiSeries[rsiSeries.length - 1]
-
-  // B) Volatility regime: ATR percentile of the trailing 200 closed candles
-  const atrSeries = atr(c1m, 14)
+  const atrSeries = atr(c5, 14)
   base.atr = atrSeries[atrSeries.length - 1]
   const trailing: number[] = []
   for (let k = Math.max(14, i - 200); k <= i; k++) {
     const v = atrSeries[k]
     if (Number.isFinite(v)) trailing.push(v)
   }
-  base.atrRank = percentileRank(trailing, base.atr)
-  if (!Number.isFinite(base.atr) || !Number.isFinite(base.atrRank) || base.atrRank < 0.2 || base.atrRank > 0.9) {
-    reasons.push('ATR regime: rank ' + (Number.isFinite(base.atrRank) ? (base.atrRank * 100).toFixed(0) + '%' : '?') + ' outside 20-90% band')
+  base.atrRank = trailing.length > 0 ? percentileRank(trailing, base.atr) : NaN
+
+  // Bullish opening range -> long; bearish/flat -> no long trade.
+  const bullish = first.c > first.o
+  if (!bullish) {
+    reasons.push('first 5m candle ' + (first.c === first.o ? 'flat' : 'bearish') + ' (' + first.o.toFixed(2) + ' -> ' + first.c.toFixed(2) + ') - no long trade (paper short side skipped, engine is long-only)')
     return base
   }
-  reasons.push('ATR regime: rank ' + (base.atrRank * 100).toFixed(0) + '% (mid band)')
 
-  // Stop distance from ATR, floored at minStopPct
-  base.stopDist = Math.max(base.atr * cfg.atrMult, cand.c * (cfg.minStopPct / 100))
-  if (!(base.stopDist > 0 && base.stopDist < cand.c * 0.25)) {
+  // C) Stop at the opening-range low, floored at minStopPct (fee floor).
+  //    Entry reference = the first candle's close (we fill at the next
+  //    candle's open, which opens at that price).
+  const entryRef = first.c
+  base.stopDist = Math.max(entryRef - first.l, entryRef * (cfg.minStopPct / 100))
+  if (!(base.stopDist > 0 && base.stopDist < entryRef * 0.25)) {
     reasons.push('stop distance out of sane bounds')
     return base
   }
 
-  // C) Entry triggers on the last closed 1m candle
-  const lookback = 8
-  const priorHigh = highestOf(c1m.map((x) => x.h), lookback, i)
-  const priorLow = lowestOf(c1m.map((x) => x.l), lookback, i)
-  const bullish = cand.c > cand.o
-
-  const momentum =
-    Number.isFinite(priorHigh) &&
-    bullish &&
-    cand.c > priorHigh &&
-    cand.c - priorHigh <= base.atr * 1.5 &&
-    base.volumeRatio >= cfg.volumeMult &&
-    Number.isFinite(base.rsi) && base.rsi >= 45 && base.rsi <= 78
-
-  const emaTouch = Number.isFinite(lastEma21) && Number.isFinite(base.atr) &&
-    Math.min(cand.l, prev.l) <= lastEma21 + base.atr * 0.75
-  const dipBuy =
-    emaTouch &&
-    bullish &&
-    cand.c > lastEma21 &&
-    base.volumeRatio >= 0.7 &&
-    Number.isFinite(base.rsi) && base.rsi >= 35 && base.rsi <= 62
-
-  if (momentum) {
-    base.kind = 'momentum'
-    reasons.push('trigger: 1m momentum break above ' + priorHigh.toFixed(2) + ' to ' + cand.c.toFixed(2) + ' (vol ' + base.volumeRatio.toFixed(1) + 'x, RSI ' + base.rsi.toFixed(1) + ')')
-    base.enter = true
-  } else if (dipBuy) {
-    base.kind = 'dip-buy'
-    reasons.push('trigger: dip-buy at 1m EMA21 ' + lastEma21.toFixed(2) + ', closed ' + cand.c.toFixed(2) + ' (RSI ' + base.rsi.toFixed(1) + ')')
-    base.enter = true
-  } else {
-    reasons.push('no setup: last 1m close ' + cand.c.toFixed(2) + ' inside ' + (Number.isFinite(priorLow) ? priorLow.toFixed(2) : '?') + ' - ' + (Number.isFinite(priorHigh) ? priorHigh.toFixed(2) : '?') + ' range (vol ' + base.volumeRatio.toFixed(2) + 'x, RSI ' + (Number.isFinite(base.rsi) ? base.rsi.toFixed(1) : '?') + ')')
-  }
+  base.kind = 'orb'
+  base.trendOK = true
+  base.enter = true
+  reasons.push('ORB: first 5m candle bullish ' + first.o.toFixed(2) + ' -> ' + first.c.toFixed(2) + ', range low ' + first.l.toFixed(2) + ', stop dist ' + base.stopDist.toFixed(2) + ' (' + ((base.stopDist / entryRef) * 100).toFixed(2) + '% of price)')
   return base
 }

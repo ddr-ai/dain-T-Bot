@@ -200,19 +200,17 @@ async function scanSymbol(
   const tick = st.prices[symbol]
   if (!tick || now - tick.at > CONFIG.staleMs) return // stale-price kill switch
 
-  const c1m = await candles(symbol, '1m')
   const c5m = await candles(symbol, '5m')
-  const decision = evaluateSetup(c1m, c5m, now, {
-    atrMult: CONFIG.atrMult,
-    minStopPct: CONFIG.minStopPct,
-    volumeMult: CONFIG.volumeMult
+  const c30m = await candles(symbol, '30m')
+  const decision = evaluateSetup(c5m, c30m, now, {
+    minStopPct: CONFIG.minStopPct
   })
   st.trendLong[symbol] = decision.trendOK // time exits consult this
 
   if (!decision.enter || decision.kind === null) return
 
   // --- setup fires: market-quality + risk gates, all of them hard ---
-  const priceNow = tick.price || c1m[c1m.length - 1]?.c
+  const priceNow = tick.price || c5m[c5m.length - 1]?.c
   if (!priceNow) return
   const ob = await book(symbol)
   const liq = liquidityOK(ob, { maxSpreadBps: CONFIG.maxSpreadBps, minDepthUsd: CONFIG.minDepthUsd })
@@ -331,7 +329,8 @@ async function scanSymbol(
     'ENTER ' + symbol + ': bought ' + executedQty.toPrecision(6) + ' @ ' + avgEntry.toFixed(2) +
     ' (' + pos.kind + ') | stop ' + pos.stop.toFixed(2) + ' | target ' + pos.target.toFixed(2) +
     ' | risk ' + pos.riskUsd.toFixed(2) + ' USD | net RR ' + rrCheck.rrNet.toFixed(2) +
-    ' | ATR rank ' + (decision.atrRank * 100).toFixed(0) + '% | vol ' + decision.volumeRatio.toFixed(1) + 'x', symbol)
+    ' | ATR rank ' + (Number.isFinite(decision.atrRank) ? (decision.atrRank * 100).toFixed(0) + '%' : '?') +
+    ' | vol ' + (Number.isFinite(decision.volumeRatio) ? decision.volumeRatio.toFixed(1) + 'x' : '?'), symbol)
 
   await ensureProtectiveOrders(ctx, pos)
 }
