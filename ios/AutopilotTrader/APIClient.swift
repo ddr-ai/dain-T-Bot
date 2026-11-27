@@ -59,7 +59,7 @@ final class APIClient {
         var u = baseURL
         let parts = pathAndQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
         u.appendPathComponent(parts[0])
-        guard parts.count > 1, let comps = URLComponents(url: u, resolvingAgainstBaseURL: false) else {
+        guard parts.count > 1, var comps = URLComponents(url: u, resolvingAgainstBaseURL: false) else {
             return u
         }
         comps.query = parts[1]
