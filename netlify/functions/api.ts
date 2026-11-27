@@ -203,9 +203,24 @@ async function startRun(st: ServerlessState, minutes: number): Promise<void> {
 
 export default async (req: Request): Promise<Response> => {
   const u = new URL(req.url)
-  const path = u.pathname.replace(/\/+$/, '') || '/api'
+  // Some HTTP clients (e.g. iOS Foundation URL building) percent-encode the
+  // '?' of a query string into the path ("/api/activity%3Flimit=60").
+  // Decode and re-split so those requests still route correctly.
+  let rawPath = u.pathname
+  let search = u.search
+  if (rawPath.includes('%3F') || rawPath.includes('%3f')) {
+    const decoded = decodeURIComponent(rawPath)
+    const q = decoded.indexOf('?')
+    if (q >= 0) {
+      rawPath = decoded.slice(0, q)
+      search = decoded.slice(q)
+    } else {
+      rawPath = decoded
+    }
+  }
+  const path = rawPath.replace(/\/+$/, '') || '/api'
   const method = req.method.toUpperCase()
-  const query = u.searchParams
+  const query = new URLSearchParams(search)
 
   if (method === 'OPTIONS') return new Response('', { status: 204, headers: JSON_HEADERS })
   if (path === '/api/health') return json(200, { ok: true, ts: Date.now() })
