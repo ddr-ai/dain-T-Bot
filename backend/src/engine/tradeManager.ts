@@ -126,10 +126,13 @@ export class TradeManager {
     }
     if (pos.remainingQty <= 1e-12) return
 
-    // 4. Trailing stop: 0.5 x ATR below price once past +1R.
+    // 4. Trailing stop once past +1R: half the entry ATR below price, but
+    //    never tighter than a quarter of the stop distance (the 1-minute
+    //    method's ATR is tiny; trailing on it alone would exit on noise).
     if (this.d.cfg.trailingStop && pos.breakevenDone && rMultiple >= 1 && Number.isFinite(pos.atr)) {
-      const newStop = price - pos.atr * 0.5
-      if (newStop > pos.stop + pos.atr * 0.1) {
+      const trailDist = Math.max(pos.atr * 0.5, pos.stopDist * 0.25)
+      const newStop = price - trailDist
+      if (newStop > pos.stop + trailDist * 0.2) {
         const moved = await this.replaceStop(pos, newStop, det)
         if (moved) {
           this.d.store.addActivity('stop', pos.symbol + ' trailing stop raised to ' + pos.stop.toFixed(2), pos.symbol)

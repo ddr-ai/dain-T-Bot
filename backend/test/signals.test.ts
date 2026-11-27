@@ -2,87 +2,88 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Candle } from '../src/gemini/types.ts'
 import { atrRankOK, correlationOf, correlationOK, liquidityOK, timeWindowOK } from '../src/strategy/regime.ts'
-import { closedOnly, evaluateSetup, trendBias1h } from '../src/strategy/signals.ts'
+import { closedOnly, evaluateSetup, trendBiasEma } from '../src/strategy/signals.ts'
 
-const SIGNAL_CFG = { atrMult: 1.5, minStopPct: 1.5, volumeMult: 1.5 }
+const SIGNAL_CFG = { atrMult: 2.0, minStopPct: 0.8, volumeMult: 1.5 }
 
-// Deterministic candle generator: 240 candles of moderate sine "weather",
-// then a 20-candle quiet consolidation just below resistance, and finally
-// (style=breakout) a volume-confirmed breakout candle above the range high.
-function gen15m(style: 'breakout' | 'range'): Candle[] {
+// Deterministic candle generator for the 1-minute method: 240 one-minute
+// candles of moderate sine "weather", then a 20-candle quiet consolidation
+// just below resistance, and finally (style=momentum) a volume-confirmed
+// breakout candle above the 8-bar range high.
+function gen1m(style: 'momentum' | 'range'): Candle[] {
   const out: Candle[] = []
   for (let k = 0; k < 260; k++) {
     if (k < 240) {
       const amp = 0.4 + 0.2 * Math.sin(k / 17)
       const c = 100 + 0.02 * k + 1.2 * Math.sin(k / 9)
       const o = out.length > 0 ? out[out.length - 1].c : c - 0.1
-      out.push({ t: k * 900000, o, h: Math.max(o, c) + amp, l: Math.min(o, c) - amp, c, v: 1000 + 40 * (k % 7) })
+      out.push({ t: k * 60000, o, h: Math.max(o, c) + amp, l: Math.min(o, c) - amp, c, v: 1000 + 40 * (k % 7) })
     } else {
       const base = out[out.length - 1].c
       const c = base + (k % 2 === 0 ? 0.25 : -0.25)
-      out.push({ t: k * 900000, o: base, h: Math.max(base, c) + 0.1, l: Math.min(base, c) - 0.1, c, v: 1000 })
+      out.push({ t: k * 60000, o: base, h: Math.max(base, c) + 0.1, l: Math.min(base, c) - 0.1, c, v: 1000 })
     }
   }
-  if (style === 'breakout') {
+  if (style === 'momentum') {
     const last = out.length - 1
-    const priorHigh = Math.max(...out.slice(last - 16, last).map((x) => x.h))
+    const priorHigh = Math.max(...out.slice(last - 8, last).map((x) => x.h))
     const cPrev = out[last - 1].c // previous close sits at the range floor by construction
     out[last] = { t: out[last].t, o: cPrev, h: priorHigh + 0.4, l: cPrev - 0.1, c: priorHigh + 0.08, v: 3200 }
   }
   return out
 }
 
-function gen1h(long: boolean): Candle[] {
+function gen5m(long: boolean): Candle[] {
   const out: Candle[] = []
   let p = 100
   for (let k = 0; k < 80; k++) {
     const c = long ? p + 0.5 : p - 0.5
     const o = p
     p = c
-    out.push({ t: k * 3600000, o, h: Math.max(o, c) + 0.2, l: Math.min(o, c) - 0.2, c, v: 5000 })
+    out.push({ t: k * 300000, o, h: Math.max(o, c) + 0.2, l: Math.min(o, c) - 0.2, c, v: 5000 })
   }
   return out
 }
 
 test('closedOnly drops the forming candle', () => {
   const now = Date.now()
-  const closed = { t: now - 2000000, o: 1, h: 2, l: 0.5, c: 1.5, v: 1 }
+  const closed = { t: now - 120000, o: 1, h: 2, l: 0.5, c: 1.5, v: 1 }
   const forming = { t: now - 10000, o: 1, h: 2, l: 0.5, c: 1.5, v: 1 }
-  const res = closedOnly([closed, forming], 900000, now)
+  const res = closedOnly([closed, forming], 60000, now)
   assert.equal(res.length, 1)
 })
 
-test('trendBias1h detects rising and falling markets', () => {
-  assert.equal(trendBias1h(gen1h(true)).long, true)
-  assert.equal(trendBias1h(gen1h(false)).long, false)
+test('trendBiasEma detects rising and falling markets', () => {
+  assert.equal(trendBiasEma(gen5m(true)).long, true)
+  assert.equal(trendBiasEma(gen5m(false)).long, false)
 })
 
-test('evaluateSetup fires on a crafted breakout', () => {
-  const c15 = gen15m('breakout')
-  const c1h = gen1h(true)
-  const nowMs = c15[c15.length - 1].t + 900000 // one full frame later = closed
-  const d = evaluateSetup(c15, c1h, nowMs, SIGNAL_CFG)
+test('evaluateSetup fires on a crafted 1m momentum break', () => {
+  const c1m = gen1m('momentum')
+  const c5m = gen5m(true)
+  const nowMs = c1m[c1m.length - 1].t + 60000 // one full frame later = closed
+  const d = evaluateSetup(c1m, c5m, nowMs, SIGNAL_CFG)
   assert.equal(d.enter, true)
-  assert.equal(d.kind, 'breakout')
-  assert.ok(d.rsi > 30 && d.rsi < 70, 'RSI should stay neutral, got ' + d.rsi)
+  assert.equal(d.kind, 'momentum')
+  assert.ok(d.rsi >= 45 && d.rsi <= 78, 'RSI should be in the momentum zone, got ' + d.rsi)
+  assert.ok(d.volumeRatio >= 1.5, 'volume should confirm, got ' + d.volumeRatio)
   assert.ok(d.atrRank >= 0.2 && d.atrRank <= 0.9, 'ATR rank should be mid band, got ' + d.atrRank)
   assert.ok(d.stopDist > 0)
 })
 
-test('evaluateSetup rejects a quiet range without a breakout', () => {
-  const c15 = gen15m('range')
-  const c1h = gen1h(true)
-  const nowMs = c15[c15.length - 1].t + 900000
-  const d = evaluateSetup(c15, c1h, nowMs, SIGNAL_CFG)
-  // final candle volume is normal, no trigger: no entry
+test('evaluateSetup rejects a quiet range without a trigger', () => {
+  const c1m = gen1m('range')
+  const c5m = gen5m(true)
+  const nowMs = c1m[c1m.length - 1].t + 60000
+  const d = evaluateSetup(c1m, c5m, nowMs, SIGNAL_CFG)
   assert.equal(d.enter, false)
 })
 
 test('evaluateSetup blocks wrong-side trend', () => {
-  const c15 = gen15m('breakout')
-  const c1h = gen1h(false) // 1h downtrend
-  const nowMs = c15[c15.length - 1].t + 900000
-  const d = evaluateSetup(c15, c1h, nowMs, SIGNAL_CFG)
+  const c1m = gen1m('momentum')
+  const c5m = gen5m(false) // 5m downtrend
+  const nowMs = c1m[c1m.length - 1].t + 60000
+  const d = evaluateSetup(c1m, c5m, nowMs, SIGNAL_CFG)
   assert.equal(d.enter, false)
   assert.equal(d.trendOK, false)
 })

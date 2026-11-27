@@ -2,10 +2,10 @@
 // Monte Carlo drawdown resampling. Usage:
 //   npm run backtest -- --symbol btcusd
 //   npm run backtest -- --symbol btcusd --candles-file dump.json
-// Data: Gemini public v2 candles (15m and 1h). If the public endpoint caps
-// history, provide a JSON file of raw v2 candle rows via --candles-file to
-// backtest deeper. Results are printed to stdout and written to
-// backend/data/backtest-report.json.
+// Data: Gemini public v2 candles (1m signal frame and 5m trend frame). If the
+// public endpoint caps history, provide a JSON file of raw v2 candle rows via
+// --candles-file to backtest deeper. Results are printed to stdout and written
+// to backend/data/backtest-report.json.
 // NOTE: includes maker/taker fees + slippage per the validation requirements.
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
@@ -40,34 +40,33 @@ interface SimResult {
 }
 
 function simulate(
-  c15: Candle[],
-  c1h: Candle[],
+  c1m: Candle[],
+  c5m: Candle[],
   cfg: AppConfig,
   volumeMult: number,
   atrMult: number,
   rr: number
 ): SimResult {
   const trades: BackTestTrade[] = []
-  const step = 15
   let cooldownIdx = -Infinity
   let equity = 0
   let peak = 0
   let maxDD = 0
   let feesTotal = 0
 
-  for (let i = 80; i < c15.length; i++) {
-    const nowMs = c15[i].t + 15 * 60_000 // evaluated at candle close
-    if (i - cooldownIdx < 4 * 4) continue
-    const window = c15.slice(0, i + 1)
-    const window1h = c1h.filter((c) => c.t + 3600_000 <= nowMs + 60_000)
-    const decision = evaluateSetup(window, window1h, nowMs, {
+  for (let i = 80; i < c1m.length; i++) {
+    const nowMs = c1m[i].t + 60_000 // evaluated at candle close
+    if (i - cooldownIdx < 5) continue // 5-minute cooldown between entries
+    const window = c1m.slice(0, i + 1)
+    const window5m = c5m.filter((c) => c.t + 300_000 <= nowMs + 60_000)
+    const decision = evaluateSetup(window, window5m, nowMs, {
       atrMult,
       minStopPct: cfg.minStopPct,
       volumeMult
     })
     if (!decision.enter || !Number.isFinite(decision.stopDist)) continue
     cooldownIdx = i
-    const entry = c15[i].c
+    const entry = c1m[i].c
     const stop = entry - decision.stopDist
     const target = entry + decision.stopDist * rr
     // fee + slippage model (both legs)
@@ -76,27 +75,27 @@ function simulate(
     feesTotal += entryFeePct + exitFeePct
     let exit: number | null = null
     let outcome: BackTestTrade['outcome'] = 'timeout'
-    // walk forward candle by candle
-    for (let j = i + 1; j < Math.min(c15.length, i + 16 * 4) && exit === null; j++) {
-      const f = c15[j]
+    // walk forward candle by candle, time exit at 1.5h (90 one-minute bars)
+    for (let j = i + 1; j < Math.min(c1m.length, i + 90) && exit === null; j++) {
+      const f = c1m[j]
       if (f.l <= stop) {
         exit = stop * (1 - cfg.slipBps / 10000)
         outcome = 'stop'
       } else if (f.h >= target) {
         exit = target
         outcome = 'target'
-      } else if (j === Math.min(c15.length - 1, i + 16 * 4 - 1)) {
+      } else if (j === Math.min(c1m.length - 1, i + 90 - 1)) {
         exit = f.c
         outcome = 'timeout'
       }
     }
-    if (exit === null) exit = c15[c15.length - 1].c
+    if (exit === null) exit = c1m[c1m.length - 1].c
     const netPct = (exit - entry) / entry - entryFeePct - exitFeePct
     equity += netPct
     if (equity > peak) peak = equity
     const dd = peak - equity
     if (dd > maxDD) maxDD = dd
-    trades.push({ entryIdx: i, entry, exit, pnlPct: netPct, outcome, tsEntry: c15[i].t, tsExit: c15[Math.min(c15.length - 1, i + 16 * 4)].t })
+    trades.push({ entryIdx: i, entry, exit, pnlPct: netPct, outcome, tsEntry: c1m[i].t, tsExit: c1m[Math.min(c1m.length - 1, i + 90)].t })
   }
 
   const wins = trades.filter((t) => t.pnlPct > 0)
@@ -180,25 +179,25 @@ async function main(): Promise<void> {
   const cfgRr = cfg.defaultRiskReward
 
   const pub = new GeminiPublic(cfg.publicBaseUrl)
-  let c15: Candle[]
-  const c1h = await pub.candles(symbol, '1hr')
+  let c1m: Candle[]
+  const c5m = await pub.candles(symbol, '5m')
   if (file && existsSync(file)) {
     const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown
     const rows = Array.isArray(raw) && Array.isArray((raw as unknown[])[0]) ? (raw[0] as unknown[]) : raw
-    c15 = (rows as unknown[]).map((r) => {
+    c1m = (rows as unknown[]).map((r) => {
       const row = r as number[]
       return { t: row[0], o: row[1], h: row[2], l: row[3], c: row[4], v: row[5] }
     })
   } else {
-    c15 = await pub.candles(symbol, '15m')
+    c1m = await pub.candles(symbol, '1m')
   }
-  c15.sort((a, b) => a.t - b.t)
-  console.log('Backtesting ' + symbol + ': ' + c15.length + ' 15m candles (' + new Date(c15[0].t).toISOString().slice(0, 10) + ' -> ' + new Date(c15[c15.length - 1].t).toISOString().slice(0, 10) + '), ' + c1h.length + ' 1h candles')
+  c1m.sort((a, b) => a.t - b.t)
+  console.log('Backtesting ' + symbol + ': ' + c1m.length + ' 1m candles (' + new Date(c1m[0].t).toISOString().slice(0, 10) + ' -> ' + new Date(c1m[c1m.length - 1].t).toISOString().slice(0, 10) + '), ' + c5m.length + ' 5m candles')
 
   // Walk-forward: split train 70% / validate 30%, small parameter grid.
-  const split = Math.floor(c15.length * 0.7)
-  const train = c15.slice(0, split)
-  const validate = c15.slice(split)
+  const split = Math.floor(c1m.length * 0.7)
+  const train = c1m.slice(0, split)
+  const validate = c1m.slice(split)
   const grid = [
     { volumeMult: 1.3, atrMult: 1.25 },
     { volumeMult: 1.5, atrMult: 1.5 },
@@ -207,13 +206,13 @@ async function main(): Promise<void> {
   ]
   let best: SimResult | undefined
   for (const g of grid) {
-    const r = simulate(train, c1h, cfg, g.volumeMult, g.atrMult, cfgRr)
+    const r = simulate(train, c5m, cfg, g.volumeMult, g.atrMult, cfgRr)
     const score = r.profitFactor === Infinity ? 999 : r.profitFactor
     console.log('  TRAIN volx' + g.volumeMult + ' atrx' + g.atrMult + ': trades ' + r.trades.length + ' PF ' + score.toFixed(2) + ' maxDD ' + fmt(r.maxDrawdownPct))
     if (!best || score > (best.profitFactor === Infinity ? 999 : best.profitFactor)) best = r
   }
   const chosen = best?.param ?? { volumeMult: cfg.volumeMult, atrMult: cfg.atrMult }
-  const test = simulate(validate, c1h, cfg, chosen.volumeMult, chosen.atrMult, cfgRr)
+  const test = simulate(validate, c5m, cfg, chosen.volumeMult, chosen.atrMult, cfgRr)
   console.log('WALK-FORWARD VALIDATION (params volx' + chosen.volumeMult + ' atrx' + chosen.atrMult + ')')
   console.log('  trades: ' + test.trades.length)
   console.log('  win rate: ' + fmt(test.winRate, 1))
@@ -223,7 +222,7 @@ async function main(): Promise<void> {
   console.log('  max drawdown: ' + fmt(test.maxDrawdownPct))
 
   const all = [...train, ...validate]
-  const full = simulate(all, c1h, cfg, chosen.volumeMult, chosen.atrMult, cfgRr)
+  const full = simulate(all, c5m, cfg, chosen.volumeMult, chosen.atrMult, cfgRr)
   const mc = monteCarlo(full.trades.map((t) => t.pnlPct))
   console.log('MONTE CARLO (1000 shuffles of the trade sequence)')
   console.log('  worst drawdown: ' + fmt(mc.worstDrawdown))
@@ -236,7 +235,7 @@ async function main(): Promise<void> {
     console.log('  WARNING: validation not profitable / too few trades - do NOT enable live autopilot on this basis.')
   }
 
-  const report = { symbol, candles: c15.length, chosen, test, monteCarlo: mc, generatedAt: Date.now() }
+  const report = { symbol, candles: c1m.length, chosen, test, monteCarlo: mc, generatedAt: Date.now() }
   const here = dirname(fileURLToPath(import.meta.url))
   const outDir = join(here, '..', '..', 'data')
   mkdirSync(outDir, { recursive: true })

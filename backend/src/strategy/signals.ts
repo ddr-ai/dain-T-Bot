@@ -1,5 +1,23 @@
-// Rule-based entry detection: multi-timeframe trend filter, then either a
-// momentum breakout or a mean-reversion bounce, confirmed by RSI + volume.
+// Rule-based entry detection - 1-MINUTE method (overwrites the old 15m/1h
+// breakout method). The first candle array is the SIGNAL frame (1 minute),
+// the second is the TREND frame (5 minutes); the frame length is inferred
+// from the candle timestamps, so the same code runs on any pair of frames.
+//
+// Method:
+//   A) Trend filter: 5m EMA21 > EMA50 (macro bias) AND 1m EMA9 > EMA21
+//      (micro alignment). Both must be long.
+//   B) Volatility regime: ATR(14) on 1m candles must sit in its 20-90%
+//      percentile band - no dead chop, no panic spikes.
+//   C) Triggers on the last CLOSED 1m candle, confirmed by RSI + volume:
+//        - momentum: close breaks the prior 8-bar high, not overextended
+//          (within 1.5 ATR), volume >= volumeMult x the 20-bar average,
+//          RSI in the 45-78 momentum zone.
+//        - dip-buy: pullback that touches the 1m EMA21 from above, closes
+//          back above it, RSI 35-62, volume at least 0.7x average.
+//   D) Stop distance = max(ATR x atrMult, minStopPct% floor). At Gemini
+//      retail fees (~0.6% round trip) the floor keeps stops wide enough
+//      that the net-RR-after-fees gate can actually pass on 1m signals.
+//
 // Every decision returns a full reason trace so the activity feed can say
 // exactly why the bot did (or did not) trade.
 
@@ -14,7 +32,7 @@ export interface SignalCfg {
 
 export interface SetupDecision {
   enter: boolean
-  kind: 'breakout' | 'support-bounce' | null
+  kind: 'momentum' | 'dip-buy' | null
   reasons: string[]
   atr: number
   stopDist: number
@@ -22,11 +40,8 @@ export interface SetupDecision {
   volumeRatio: number
   trendOK: boolean
   atrRank: number
-  trendState: number // ema gaps, used for time-exit trend flip checks
+  trendState: number // 5m ema gap %, used for time-exit trend flip checks
 }
-
-const FRAME_15M_MS = 15 * 60 * 1000
-const FRAME_1H_MS = 60 * 60 * 1000
 
 // Drop the still-forming candle so decisions only use closed data.
 export function closedOnly(candles: Candle[], frameMs: number, nowMs: number): Candle[] {
@@ -36,9 +51,20 @@ export function closedOnly(candles: Candle[], frameMs: number, nowMs: number): C
   return candles
 }
 
-export function trendBias1h(candles1hClosed: Candle[]): { long: boolean, gapPct: number } {
-  if (candles1hClosed.length < 51) return { long: false, gapPct: NaN }
-  const closes = candles1hClosed.map((c) => c.c)
+// Frame length from the data itself (uniform exchange candles).
+function frameOf(candles: Candle[]): number {
+  const n = candles.length
+  for (let k = n - 1; k > 0 && k > n - 4; k--) {
+    const d = candles[k].t - candles[k - 1].t
+    if (d > 0) return d
+  }
+  return 60_000
+}
+
+// Trend bias of the TREND frame: EMA21 vs EMA50 on closes.
+export function trendBiasEma(candlesClosed: Candle[]): { long: boolean, gapPct: number } {
+  if (candlesClosed.length < 51) return { long: false, gapPct: NaN }
+  const closes = candlesClosed.map((c) => c.c)
   const e21 = ema(closes, 21)
   const e50 = ema(closes, 50)
   const last21 = e21[e21.length - 1]
@@ -48,78 +74,64 @@ export function trendBias1h(candles1hClosed: Candle[]): { long: boolean, gapPct:
   return { long, gapPct }
 }
 
-export function trendBias15m(candles15mClosed: Candle[]): boolean {
-  if (candles15mClosed.length < 22) return false
-  const closes = candles15mClosed.map((c) => c.c)
-  const e9 = ema(closes, 9)
-  const e21 = ema(closes, 21)
-  const a = e9[e9.length - 1]
-  const b = e21[e21.length - 1]
-  return Number.isFinite(a) && Number.isFinite(b) && a > b
-}
+// Back-compat alias: the old name is referenced by tools/tests.
+export const trendBias1h = trendBiasEma
 
 export function evaluateSetup(
-  candles15m: Candle[],
-  candles1h: Candle[],
+  candles1m: Candle[],
+  candles5m: Candle[],
   nowMs: number,
   cfg: SignalCfg
 ): SetupDecision {
   const reasons: string[] = []
-  const c15 = closedOnly(candles15m, FRAME_15M_MS, nowMs)
-  const c1h = closedOnly(candles1h, FRAME_1H_MS, nowMs)
+  const c1m = closedOnly(candles1m, frameOf(candles1m), nowMs)
+  const c5m = closedOnly(candles5m, frameOf(candles5m), nowMs)
 
   const base: SetupDecision = {
     enter: false, kind: null, reasons, atr: NaN, stopDist: NaN,
     rsi: NaN, volumeRatio: NaN, trendOK: false, atrRank: NaN, trendState: NaN
   } as SetupDecision
 
-  if (c15.length < 60) {
-    reasons.push('insufficient 15m history')
+  if (c1m.length < 60) {
+    reasons.push('insufficient 1m history')
     return base
   }
-  if (c1h.length < 51) {
-    reasons.push('insufficient 1h history')
+  if (c5m.length < 51) {
+    reasons.push('insufficient 5m history')
     return base
   }
 
-  // A) Multi-timeframe trend filter
-  const t1h = trendBias1h(c1h)
-  const t15 = trendBias15m(c15)
-  base.trendState = Number.isFinite(t1h.gapPct) ? t1h.gapPct : 0
-  if (!(t1h.long && t15)) {
-    reasons.push('trend filter: not long-biased (1h EMA21 vs EMA50: ' + (Number.isFinite(t1h.gapPct) ? t1h.gapPct.toFixed(2) : '?') + '%)')
+  // A) Multi-timeframe trend filter (5m macro + 1m micro alignment)
+  const t5 = trendBiasEma(c5m)
+  base.trendState = Number.isFinite(t5.gapPct) ? t5.gapPct : 0
+  const closes = c1m.map((x) => x.c)
+  const e9 = ema(closes, 9)
+  const e21 = ema(closes, 21)
+  const microLong = Number.isFinite(e9[e9.length - 1]) && Number.isFinite(e21[e21.length - 1]) && e9[e9.length - 1] > e21[e21.length - 1]
+  if (!(t5.long && microLong)) {
+    reasons.push('trend filter: not long-biased (5m EMA21 vs EMA50: ' + (Number.isFinite(t5.gapPct) ? t5.gapPct.toFixed(2) : '?') + '%)')
     return base
   }
   base.trendOK = true
-  reasons.push('trend filter: long-biased on 1h + 15m')
+  reasons.push('trend filter: long-biased on 5m + 1m EMA alignment')
 
-  const i = c15.length - 1 // last CLOSED candle
-  const cand = c15[i]
-  const prev = c15[i - 1]
+  const i = c1m.length - 1 // last CLOSED candle
+  const cand = c1m[i]
+  const prev = c1m[i - 1]
+  const lastEma21 = e21[e21.length - 1]
 
-  // Volume confirmation
+  // Volume confirmation vs the trailing 20-bar average
   const volWindow: number[] = []
-  for (let k = Math.max(1, i - 20); k < i; k++) volWindow.push(c15[k].v)
+  for (let k = Math.max(1, i - 20); k < i; k++) volWindow.push(c1m[k].v)
   const avgVol = mean(volWindow)
   base.volumeRatio = avgVol > 0 ? cand.v / avgVol : 1
-  if (!(base.volumeRatio >= cfg.volumeMult)) {
-    reasons.push('volume ' + base.volumeRatio.toFixed(2) + 'x < ' + cfg.volumeMult + 'x of 20-period average')
-    return base
-  }
-  reasons.push('volume ' + base.volumeRatio.toFixed(2) + 'x confirms')
 
-  // RSI extremes
-  const closes = c15.map((x) => x.c)
+  // RSI momentum read
   const rsiSeries = rsi(closes, 14)
   base.rsi = rsiSeries[rsiSeries.length - 1]
-  if (!Number.isFinite(base.rsi) || base.rsi <= 30 || base.rsi >= 70) {
-    reasons.push('RSI ' + (Number.isFinite(base.rsi) ? base.rsi.toFixed(1) : '?') + ' in extreme zone')
-    return base
-  }
-  reasons.push('RSI ' + base.rsi.toFixed(1) + ' neutral')
 
-  // C) Volatility regime: ATR percentile of the trailing 200 closed candles
-  const atrSeries = atr(c15, 14)
+  // B) Volatility regime: ATR percentile of the trailing 200 closed candles
+  const atrSeries = atr(c1m, 14)
   base.atr = atrSeries[atrSeries.length - 1]
   const trailing: number[] = []
   for (let k = Math.max(14, i - 200); k <= i; k++) {
@@ -140,31 +152,39 @@ export function evaluateSetup(
     return base
   }
 
-  // B) Entry trigger: breakout above resistance or bounce off support
-  const lookback = 16
-  const priorHigh = highestOf(c15.map((x) => x.h), lookback, i)
-  const priorLow = lowestOf(c15.map((x) => x.l), lookback, i)
+  // C) Entry triggers on the last closed 1m candle
+  const lookback = 8
+  const priorHigh = highestOf(c1m.map((x) => x.h), lookback, i)
+  const priorLow = lowestOf(c1m.map((x) => x.l), lookback, i)
   const bullish = cand.c > cand.o
 
-  const breakout = Number.isFinite(priorHigh) && cand.c > priorHigh && (cand.c - priorHigh) <= base.atr * 1.0
-  const nearSupport = Number.isFinite(priorLow) && Math.min(cand.l, prev.l) <= priorLow + base.atr * 0.3
-  const bounce = nearSupport && bullish && cand.c > priorLow
+  const momentum =
+    Number.isFinite(priorHigh) &&
+    bullish &&
+    cand.c > priorHigh &&
+    cand.c - priorHigh <= base.atr * 1.5 &&
+    base.volumeRatio >= cfg.volumeMult &&
+    Number.isFinite(base.rsi) && base.rsi >= 45 && base.rsi <= 78
 
-  if (breakout && bounce) {
-    // both triggers fired: the close is above resistance, so breakout wins
-    base.kind = 'breakout'
-    reasons.push('trigger: breakout (with support overlap) at ' + cand.c)
+  const emaTouch = Number.isFinite(lastEma21) && Number.isFinite(base.atr) &&
+    Math.min(cand.l, prev.l) <= lastEma21 + base.atr * 0.75
+  const dipBuy =
+    emaTouch &&
+    bullish &&
+    cand.c > lastEma21 &&
+    base.volumeRatio >= 0.7 &&
+    Number.isFinite(base.rsi) && base.rsi >= 35 && base.rsi <= 62
+
+  if (momentum) {
+    base.kind = 'momentum'
+    reasons.push('trigger: 1m momentum break above ' + priorHigh.toFixed(2) + ' to ' + cand.c.toFixed(2) + ' (vol ' + base.volumeRatio.toFixed(1) + 'x, RSI ' + base.rsi.toFixed(1) + ')')
     base.enter = true
-  } else if (breakout) {
-    base.kind = 'breakout'
-    reasons.push('trigger: breakout above ' + priorHigh.toFixed(2) + ' to ' + cand.c.toFixed(2))
-    base.enter = true
-  } else if (bounce) {
-    base.kind = 'support-bounce'
-    reasons.push('trigger: bounce off support ' + priorLow.toFixed(2) + ', closed ' + cand.c.toFixed(2))
+  } else if (dipBuy) {
+    base.kind = 'dip-buy'
+    reasons.push('trigger: dip-buy at 1m EMA21 ' + lastEma21.toFixed(2) + ', closed ' + cand.c.toFixed(2) + ' (RSI ' + base.rsi.toFixed(1) + ')')
     base.enter = true
   } else {
-    reasons.push('no setup: last close ' + cand.c.toFixed(2) + ' inside ' + priorLow.toFixed(2) + ' - ' + priorHigh.toFixed(2) + ' range')
+    reasons.push('no setup: last 1m close ' + cand.c.toFixed(2) + ' inside ' + (Number.isFinite(priorLow) ? priorLow.toFixed(2) : '?') + ' - ' + (Number.isFinite(priorHigh) ? priorHigh.toFixed(2) : '?') + ' range (vol ' + base.volumeRatio.toFixed(2) + 'x, RSI ' + (Number.isFinite(base.rsi) ? base.rsi.toFixed(1) : '?') + ')')
   }
   return base
 }

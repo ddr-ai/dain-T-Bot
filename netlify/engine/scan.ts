@@ -200,9 +200,9 @@ async function scanSymbol(
   const tick = st.prices[symbol]
   if (!tick || now - tick.at > CONFIG.staleMs) return // stale-price kill switch
 
-  const c15 = await candles(symbol, '15m')
-  const c1h = await candles(symbol, '1hr')
-  const decision = evaluateSetup(c15, c1h, now, {
+  const c1m = await candles(symbol, '1m')
+  const c5m = await candles(symbol, '5m')
+  const decision = evaluateSetup(c1m, c5m, now, {
     atrMult: CONFIG.atrMult,
     minStopPct: CONFIG.minStopPct,
     volumeMult: CONFIG.volumeMult
@@ -212,7 +212,7 @@ async function scanSymbol(
   if (!decision.enter || decision.kind === null) return
 
   // --- setup fires: market-quality + risk gates, all of them hard ---
-  const priceNow = tick.price || c15[c15.length - 1]?.c
+  const priceNow = tick.price || c1m[c1m.length - 1]?.c
   if (!priceNow) return
   const ob = await book(symbol)
   const liq = liquidityOK(ob, { maxSpreadBps: CONFIG.maxSpreadBps, minDepthUsd: CONFIG.minDepthUsd })

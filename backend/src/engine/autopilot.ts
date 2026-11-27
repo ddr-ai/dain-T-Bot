@@ -16,7 +16,7 @@ import { Store } from '../store/store.ts'
 import type { PositionDoc } from '../store/store.ts'
 import { EventBus } from '../notify/events.ts'
 import type { AppConfig } from '../config/env.ts'
-import { evaluateSetup, trendBias1h, closedOnly } from '../strategy/signals.ts'
+import { evaluateSetup, trendBiasEma, closedOnly } from '../strategy/signals.ts'
 import { liquidityOK, timeWindowOK, correlationOK, correlationOf } from '../strategy/regime.ts'
 import { breakerAction, positionSize, rrAfterFees, clampRiskReward, correlationGateForEntry } from '../risk/guards.ts'
 import { PaperBroker } from './paperBroker.ts'
@@ -40,8 +40,8 @@ export interface UpdateSettingsResult {
 export class Autopilot {
   private sockets = new Map<string, MarketSocket>()
   private prices = new Map<string, SymbolTick>()
-  private candles15 = new Map<string, { at: number, data: Candle[] }>()
-  private candles1h = new Map<string, { at: number, data: Candle[] }>()
+  private candles1m = new Map<string, { at: number, data: Candle[] }>()
+  private candles5m = new Map<string, { at: number, data: Candle[] }>()
   private corr = new Map<string, number>()
   private corrAt = 0
   private trendLong = new Map<string, boolean>()
@@ -166,8 +166,8 @@ export class Autopilot {
     )
   }
 
-  private async getCandles(symbol: string, frame: '15m' | '1hr'): Promise<Candle[]> {
-    const map = frame === '15m' ? this.candles15 : this.candles1h
+  private async getCandles(symbol: string, frame: '1m' | '5m'): Promise<Candle[]> {
+    const map = frame === '1m' ? this.candles1m : this.candles5m
     const hit = map.get(symbol)
     if (hit && Date.now() - hit.at < 25_000) return hit.data
     const data = await this.pub.candles(symbol, frame)
@@ -362,9 +362,9 @@ export class Autopilot {
       return
     }
 
-    const c15 = await this.getCandles(symbol, '15m')
-    const c1h = await this.getCandles(symbol, '1hr')
-    const decision = evaluateSetup(c15, c1h, now, {
+    const c1m = await this.getCandles(symbol, '1m')
+    const c5m = await this.getCandles(symbol, '5m')
+    const decision = evaluateSetup(c1m, c5m, now, {
       atrMult: this.cfg.atrMult,
       minStopPct: this.cfg.minStopPct,
       volumeMult: this.cfg.volumeMult
@@ -379,7 +379,7 @@ export class Autopilot {
 
     // --- signal found: run the market-quality and risk gates ---
     const tick = this.prices.get(symbol)
-    const priceNow = tick ? tick.price : c15[c15.length - 1].c
+    const priceNow = tick ? tick.price : (c1m[c1m.length - 1]?.c ?? 0)
     const book = await this.pub.book(symbol)
     const liq = liquidityOK(book, this.cfg)
     if (!liq.ok) {
@@ -685,8 +685,8 @@ export class Autopilot {
   // Used by tests/tools: current closed-candle trend bias.
   async trendFresh(symbol: string): Promise<boolean | null> {
     try {
-      const c1h = await this.getCandles(symbol, '1hr')
-      return trendBias1h(closedOnly(c1h, 3600_000, Date.now())).long
+      const c5m = await this.getCandles(symbol, '5m')
+      return trendBiasEma(closedOnly(c5m, 300_000, Date.now())).long
     } catch {
       return null
     }
