@@ -78,9 +78,14 @@ struct SettingsView: View {
                     SecureField("API secret", text: $apiSecret)
                         .textInputAutocapitalization(.never)
                     Button("Save credentials") {
-                        Task { await state.saveCredentials(key: apiKey, secret: apiSecret) }
+                        // Capture the typed values into locals FIRST: a Task
+                        // reads @State when it RUNS, so clearing the fields
+                        // before spawning it sends empty strings to the server.
+                        let k = apiKey
+                        let s = apiSecret
                         apiKey = ""
                         apiSecret = ""
+                        Task { await state.saveCredentials(key: k, secret: s) }
                     }
                     .disabled(apiKey.count < 10 || apiSecret.count < 10)
                     Button("Remove credentials", role: .destructive) {
