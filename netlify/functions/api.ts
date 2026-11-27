@@ -278,10 +278,29 @@ export default async (req: Request): Promise<Response> => {
       return json(200, { ok: true, autopilotOn: enabled })
     }
     if (method === 'POST' && path === '/api/credentials') {
-      const body = await bodyOf(req)
-      const key = String(body.key ?? '')
-      const secret = String(body.secret ?? '')
-      if (key.length < 10 || secret.length < 10) return err(400, 'key and secret look invalid')
+      // Parse inline (not via bodyOf) so a rejected save can report exactly
+      // what arrived - field lengths, raw byte count, parse failures.
+      const raw = await req.text().catch(() => '')
+      let body: Record<string, unknown> = {}
+      let parseFailed = false
+      try {
+        const parsed = raw ? JSON.parse(raw) : {}
+        if (parsed && typeof parsed === 'object') body = parsed as Record<string, unknown>
+        else parseFailed = true
+      } catch {
+        parseFailed = true
+      }
+      const key = String(body.key ?? '').trim()
+      const secret = String(body.secret ?? '').trim()
+      if (key.length < 8 || secret.length < 8) {
+        const why = 'Gemini key rejected: received key length ' + key.length +
+          ', secret length ' + secret.length + ', raw body ' + raw.length + ' bytes' +
+          (parseFailed ? ' (body did not parse as JSON)' : '') +
+          ', fields: ' + Object.keys(body).join(',')
+        addActivity(st, 'error', why)
+        await saveState(st)
+        return err(400, why)
+      }
       await saveCreds({ key, secret })
       addActivity(st, 'security', 'Gemini credentials saved (AES-256-GCM encrypted)')
       await saveState(st)
