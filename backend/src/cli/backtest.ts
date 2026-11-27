@@ -42,11 +42,12 @@ interface SimResult {
   param: { rr: number, minStopPct: number }
 }
 
-// Zarattini & Aziz first-candle ORB, long-only session simulation:
-// for each UTC day (weekdays only), if the first 5m candle closes bullish,
-// enter at the open of the second candle, stop at the first candle's low
-// (floored at minStopPct), target rr x stop, and exit at the session close
-// if neither is hit. Fees + slippage on both legs.
+// Zarattini & Aziz first-candle ORB, long-only session simulation with the
+// 2026-validated gates: for each UTC weekday session, if the first 5m candle
+// closes bullish AND above the trailing 24h mean (SMA288 of 5m closes) AND its
+// range is at least 0.2% wide, enter at the open of the second candle, stop at
+// the first candle's low (floored at minStopPct), target rr x stop, and exit at
+// the session close if neither is hit. Fees + slippage on both legs.
 function simulate(
   c5m: Candle[],
   cfg: AppConfig,
@@ -60,6 +61,12 @@ function simulate(
   let feesTotal = 0
   const entryFeePct = (cfg.makerBps + cfg.slipBps) / 10000
   const exitFeePct = (cfg.takerBps + cfg.slipBps) / 10000
+  const closesAll = c5m.map((x) => x.c)
+  const smaAt = (idx: number): number => {
+    const lo = Math.max(0, idx - 287)
+    const win = closesAll.slice(lo, idx + 1)
+    return win.reduce((s, v) => s + v, 0) / win.length
+  }
 
   let i = 0
   while (i < c5m.length) {
@@ -67,8 +74,13 @@ function simulate(
     const weekday = new Date(sessionStart).getUTCDay()
     const first = c5m[i]
 
-    // first candle of the session, weekday, bullish -> candidate
-    if (first.t === sessionStart && weekday !== 0 && weekday !== 6 && first.c > first.o) {
+    // first candle of the session, weekday, bullish, above 24h trend,
+    // opening range at least 0.2% wide -> candidate
+    if (
+      first.t === sessionStart && weekday !== 0 && weekday !== 6 && first.c > first.o &&
+      i >= 287 && first.c > smaAt(i) &&
+      (first.h - first.l) / first.c >= 0.002
+    ) {
       const entryBar = c5m[i + 1]
       if (entryBar && entryBar.t === sessionStart + FIVE_MIN_MS) {
         const entry = entryBar.o
@@ -217,10 +229,10 @@ async function main(): Promise<void> {
   const train = c5m.slice(0, split)
   const validate = c5m.slice(split)
   const grid = [
-    { rr: 5, minStopPct: 0.8 },
-    { rr: 8, minStopPct: 0.8 },
-    { rr: 10, minStopPct: 0.8 },
-    { rr: 10, minStopPct: 1.2 }
+    { rr: 2.5, minStopPct: 1.5 },
+    { rr: 3.0, minStopPct: 1.5 },
+    { rr: 3.5, minStopPct: 1.5 },
+    { rr: 3.0, minStopPct: 1.2 }
   ]
   let best: SimResult | undefined
   for (const g of grid) {

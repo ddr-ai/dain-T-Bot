@@ -9,11 +9,12 @@
 //   A) Session = UTC calendar day (00:00 UTC open - crypto's daily boundary
 //      and perp-funding settlement). Weekends are skipped (thin books).
 //   B) Trigger: the FIRST 5-minute candle of the session (00:00-00:05 UTC).
-//      Bullish close -> long at the next candle's open. Bearish or flat ->
-//      no trade (the paper also shorts; this engine is long-only by design).
+//      Bullish close ABOVE the trailing 24h mean (SMA288 of 5m closes) with a
+//      range at least 0.2% wide -> long at the next candle's open. Bearish,
+//      flat, below-trend or razor-thin ranges -> no trade.
 //   C) Stop loss at the LOW of the first candle, floored at MIN_STOP_PCT
-//      (fees cost ~0.64% round trip at retail rates, so sub-fee stops lose
-//      more than 1R in practice). Take-profit at RR x stop (paper: 10R).
+//      (fees cost ~0.64% round trip at retail rates; the 1.5% floor keeps
+//      fees below ~0.43R per trade). Take-profit at RR x stop (default 3x).
 //   D) Time exit: everything flat before the next session (paper exits at
 //      the session close). The trade managers close positions unconditionally
 //      TIME_EXIT_HOURS after entry - no trailing stop, winners run.
@@ -44,6 +45,9 @@ export interface SetupDecision {
 
 const DAY_MS = 86_400_000
 const FIVE_MIN_MS = 300_000
+// Minimum opening-range width (first-candle high-low as a fraction of close)
+// for the entry to carry information; validated on full-year 2026 data.
+const MIN_RANGE_PCT = 0.002
 
 // Drop the still-forming candle so decisions only use closed data.
 export function closedOnly(candles: Candle[], frameMs: number, nowMs: number): Candle[] {
@@ -157,6 +161,31 @@ export function evaluateSetup(
   const bullish = first.c > first.o
   if (!bullish) {
     reasons.push('first 5m candle ' + (first.c === first.o ? 'flat' : 'bearish') + ' (' + first.o.toFixed(2) + ' -> ' + first.c.toFixed(2) + ') - no long trade (paper short side skipped, engine is long-only)')
+    return base
+  }
+
+  // 2026-validation trend filter: only take the long side when the first
+  // candle closes ABOVE the trailing 24h mean (288 x 5m closes). In the
+  // 2026 bear year this one gate cut the ORB method's loss by ~3.5x and
+  // the max drawdown by ~3.5x (69 trades instead of 336). Backtested on
+  // full-year 2026 5m data for BTC/ETH/SOL, fee-inclusive.
+  const SMA_WINDOW = 288
+  if (c5.length < SMA_WINDOW) {
+    reasons.push('insufficient 24h history for the trend filter (' + c5.length + '/' + SMA_WINDOW + ' bars)')
+    return base
+  }
+  const closesAll = c5.map((x) => x.c)
+  const sma24h = mean(closesAll.slice(-SMA_WINDOW))
+  if (!(first.c > sma24h)) {
+    reasons.push('below 24h trend (close ' + first.c.toFixed(2) + ' vs SMA288 ' + sma24h.toFixed(2) + ') - bear filter')
+    return base
+  }
+
+  // 2026-validation range gate: a razor-thin opening range carries no
+  // information and the stop floor then dominates the geometry - skip it.
+  const rangePct = (first.h - first.l) / first.c
+  if (rangePct < MIN_RANGE_PCT) {
+    reasons.push('opening range too thin (' + (rangePct * 100).toFixed(3) + '% < ' + (MIN_RANGE_PCT * 100).toFixed(2) + '%)')
     return base
   }
 

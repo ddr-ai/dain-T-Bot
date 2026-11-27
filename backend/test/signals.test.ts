@@ -4,7 +4,7 @@ import type { Candle } from '../src/gemini/types.ts'
 import { atrRankOK, correlationOf, correlationOK, liquidityOK, timeWindowOK } from '../src/strategy/regime.ts'
 import { closedOnly, evaluateSetup, trendBiasEma } from '../src/strategy/signals.ts'
 
-const SIGNAL_CFG = { minStopPct: 0.8 }
+const SIGNAL_CFG = { minStopPct: 1.5 }
 
 // Monday 5 January 2026, 00:00 UTC - a weekday session open.
 const MON = Date.UTC(2026, 0, 5)
@@ -18,7 +18,7 @@ const FIVE_MIN = 300_000
 // second candle (dropped by closedOnly when evaluated inside the window).
 function genOrb5m(sessionStart: number, first: { o: number, h: number, l: number, c: number, v?: number }, barsAfter = 1): Candle[] {
   const out: Candle[] = []
-  const histBars = 90
+  const histBars = 300
   for (let k = 0; k < histBars; k++) {
     const t = sessionStart - (histBars - k) * FIVE_MIN
     const c = 100 + Math.sin(k / 9) * 0.8
@@ -62,26 +62,52 @@ test('trendBiasEma detects rising and falling markets', () => {
   assert.equal(trendBiasEma(gen5m(false)).long, false)
 })
 
-test('evaluateSetup fires ORB long on a bullish first candle', () => {
+test('evaluateSetup fires ORB long on a bullish first candle in an uptrend', () => {
   const c5m = genOrb5m(MON, { o: 100, h: 101.4, l: 99.5, c: 101 })
   const now = MON + 6 * 60_000 // 00:06 UTC, inside the [5,10) entry window
   const d = evaluateSetup(c5m, gen5m(true), now, SIGNAL_CFG)
   assert.equal(d.enter, true)
   assert.equal(d.kind, 'orb')
   assert.equal(d.trendOK, true)
-  // stop at the opening-range low: 101 - 99.5 = 1.5 (above the 0.8% floor)
-  assert.ok(Math.abs(d.stopDist - 1.5) < 0.01, 'stop should sit at the range low, got ' + d.stopDist)
+  // stop at the opening-range low, floored at 1.5%: max(101-99.5, 1.515)
+  const expected = Math.max(101 - 99.5, 101 * 0.015)
+  assert.ok(Math.abs(d.stopDist - expected) < 0.01, 'stop should sit at the range low or floor, got ' + d.stopDist)
   assert.ok(d.reasons[d.reasons.length - 1].includes('ORB'), 'reason trace should name the ORB trigger')
 })
 
 test('evaluateSetup widens thin opening ranges to the stop floor', () => {
-  // range low only 0.2 below the close -> the 0.8% fee floor binds
+  // range low only 0.2 below the close -> the 1.5% fee floor binds
   const c5m = genOrb5m(MON, { o: 100, h: 100.5, l: 100.2, c: 100.4 })
   const now = MON + 6 * 60_000
   const d = evaluateSetup(c5m, gen5m(true), now, SIGNAL_CFG)
   assert.equal(d.enter, true)
-  const expected = 100.4 * 0.008
+  const expected = 100.4 * 0.015
   assert.ok(Math.abs(d.stopDist - expected) < 0.01, 'stop should be floored at minStopPct, got ' + d.stopDist)
+})
+
+test('evaluateSetup blocks bullish first candles below the 24h trend', () => {
+  // history trading around 110, first candle closes at 106: bullish but far
+  // below the trailing 24h mean -> the bear filter must block the entry
+  const out: Candle[] = []
+  for (let k = 0; k < 300; k++) {
+    const t = MON - (300 - k) * FIVE_MIN
+    const c = 110 + Math.sin(k / 9) * 0.5
+    const o = out.length > 0 ? out[out.length - 1].c : c - 0.05
+    out.push({ t, o, h: Math.max(o, c) + 0.2, l: Math.min(o, c) - 0.2, c, v: 1000 })
+  }
+  out.push({ t: MON, o: 105, h: 106.1, l: 104.9, c: 106, v: 3000 })
+  out.push({ t: MON + FIVE_MIN, o: 106, h: 106.2, l: 105.9, c: 106.1, v: 1200 })
+  const d = evaluateSetup(out, gen5m(true), MON + 6 * 60_000, SIGNAL_CFG)
+  assert.equal(d.enter, false)
+  assert.ok(d.reasons.some((r) => r.includes('below 24h trend')), 'reason should name the trend filter')
+})
+
+test('evaluateSetup blocks razor-thin opening ranges', () => {
+  const c5m = genOrb5m(MON, { o: 100, h: 100.05, l: 99.98, c: 100.02 })
+  const now = MON + 6 * 60_000
+  const d = evaluateSetup(c5m, gen5m(true), now, SIGNAL_CFG)
+  assert.equal(d.enter, false)
+  assert.ok(d.reasons.some((r) => r.includes('too thin')), 'reason should name the range gate')
 })
 
 test('evaluateSetup rejects a bearish first candle (long-only engine)', () => {

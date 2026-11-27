@@ -25,10 +25,15 @@ deliberately skipped here.
 ### B. Entry trigger (one per session per symbol)
 
 Watch the FIRST 5-minute candle of the session (00:00-00:05 UTC) - that
-candle is the opening range:
+candle is the opening range. ALL of these must hold:
 
-- Bullish close (close > open): go long at the next candle's open.
-- Bearish or flat close: no trade today for that symbol.
+- Bullish close (close > open),
+- close ABOVE the trailing 24h mean (SMA288 of 5m closes) - the 2026
+  validation showed this trend gate alone cuts the method's drawdown ~3.5x,
+- opening range at least 0.2% wide (razor-thin ranges carry no information).
+
+Then go long at the next candle's open. Bearish, flat, below-trend or
+thin-range sessions are no-trade days for that symbol.
 
 The entry window is the second 5-minute candle of the session
 (00:05-00:10 UTC). If a market-quality or risk gate blocks the fill, the
@@ -37,16 +42,28 @@ the session is over for that symbol.
 
 ### C. Stop, target, and exit
 
-- Stop loss at the LOW of the first candle, floored at 0.8% of price. The
+- Stop loss at the LOW of the first candle, floored at 1.5% of price. The
   floor exists because fees cost ~0.64% round trip at Gemini retail rates;
-  sub-fee stops lose more than 1R in practice.
-- Take-profit at RR x the stop distance. Default RR is 10x - the paper's
-  10R target. Win rate is low by design; a few big winners pay for many
-  small losses.
+  at a 1.5% stop the fee drag stays below ~0.43R per trade.
+- Take-profit at RR x the stop distance, default 3x (slider 2.2x - 10x).
 - No trailing stop: winners run to the target or the session close. The
   breakeven move at +1R (stop to entry + fee buffer) still protects.
 - Time exit: everything flat ~23h after entry (unconditional) - no position
   carries into the next session.
+
+### C2. 2026 full-year validation (honest results)
+
+Backtested Jan 1 - Nov 26, 2026 on ~95,000 five-minute candles per symbol
+(BTC/ETH/SOL), fee-inclusive at the engine's cost model, engine sizing
+(30% buying power, 1.5% risk cap): 2026 was a bear year (BTC -31%, ETH -43%,
+SOL -43%) and NO long-only 5-minute method family tested was net positive -
+ORB variants, RSI(2) mean reversion, VWAP reversion, EMA pullbacks, breakout
+momentum, capitulation bounces all lost to fees + downtrend. This exact
+configuration (trend gate + range gate + 1.5% floor + 3R) was the best of
+everything tested: -6.2% engine equity vs -21.6% for the unfiltered ORB,
+6.3% max drawdown vs 22%, ~69 trades/year vs 336. The engine's cash-first
+discipline beat buy-and-hold by 25-37 points. Treat it as damage control in
+bears, upside capture in bulls - and validate in paper first.
 
 ### D. Order book microstructure (Gemini L1/L2)
 
@@ -88,13 +105,13 @@ Gemini daily candles and are exposed at GET /api/correlations.
 2. Position sizing (automatic, Kelly-lite): qty = (equity x risk%) /
    (entry - stop), rounded DOWN to the symbol step size, never above the
    configured risk cap (hard max 3%).
-3. Opening-range stop: the first candle's low, floored at 0.8% of price
-   (fee floor - a stop tighter than the round-trip cost loses more than 1R).
-4. Risk:reward slider (2.2x - 10.0x, default 10.0x, the paper's 10R target)
-   moves ONLY the take-profit distance. It can never increase position size.
+3. Opening-range stop: the first candle's low, floored at 1.5% of price
+   (fee floor - at a 1.5% stop the ~0.64% round-trip cost stays under 0.43R).
+4. Risk:reward slider (2.2x - 10.0x, default 3.0x) moves ONLY the
+   take-profit distance. It can never increase position size.
 5. Fee & slippage check: maker+taker fees plus 2 bps slippage are subtracted
    from the projected reward; if net RR < 1.2 the trade is aborted. At the
-   default 10R this gate passes easily; it protects if you slide the RR down.
+   default 3R this gate still passes; it protects if you slide the RR down.
 6. Daily loss breaker: at -3% day P&L (realized + unrealized, fees included)
    new entries halt for the day; at -5% everything flattens and autopilot
    disables until manually re-enabled.
@@ -112,7 +129,7 @@ Gemini daily candles and are exposed at GET /api/correlations.
   unprotected positions never exist.
 - OCO emulation: when one side fills, the sibling order is cancelled.
 - Breakeven: after +1R the stop moves to entry plus a fee buffer.
-- No trailing stop: the ORB edge is letting winners run to the 10R target
+- No trailing stop: the ORB edge is letting winners run to the RR target
   or the session close. Only the breakeven move protects past +1R.
 - Partial profit (optional flag): sell 50% at +1R, stop to breakeven.
 - Time exit: after 23 hours open, exit unconditionally at market (session

@@ -91,8 +91,8 @@ API responses for offline viewing.
 ## What the bot does automatically
 
 Setup detection (5-minute session opening-range / ORB per Zarattini & Aziz
-2023: first 5m candle direction at the UTC session open, range-low stop,
-10R target, flat by session close),
+2023 with 2026-validated gates: first 5m candle direction at the UTC session
+open, 24h-trend filter, range-low stop, 3R target, flat by session close),
 volatility regime filtering, order-book liquidity checks, time filters,
 position sizing, entry (post-only maker), stop-loss + take-profit placement
 on-exchange, OCO emulation, breakeven moves, ATR trailing, optional partial

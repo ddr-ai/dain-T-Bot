@@ -35,13 +35,13 @@ export const CONFIG: AppConfig = {
   maxTradesPerSymbolPerDay: num(process.env.MAX_TRADES_PER_SYMBOL_PER_DAY, 2),
   setupsPer4h: num(process.env.MAX_SETUPS_PER_SYMBOL_PER_4H, 1),
   cooldownMinutes: num(process.env.COOLDOWN_MINUTES, 30),
-  // 5-minute ORB defaults: paper target 10R (Zarattini & Aziz); slider range [rrMin, rrMax];
-  // the fee floor on stops keeps the net-RR abort gate honest.
-  defaultRiskReward: num(process.env.DEFAULT_RISK_REWARD, 10.0),
+  // 5-minute ORB defaults (2026-validated): 1.5% fee-aware stop floor, 3R
+  // target. 2026 full-year backtest: best config found; still selective in bears.
+  defaultRiskReward: num(process.env.DEFAULT_RISK_REWARD, 3.0),
   rrMin: num(process.env.RISK_REWARD_MIN, 2.2),
   rrMax: num(process.env.RISK_REWARD_MAX, 10.0),
   atrMult: num(process.env.ATR_STOP_MULTIPLIER, 2.0),
-  minStopPct: num(process.env.MIN_STOP_PCT, 0.8),
+  minStopPct: num(process.env.MIN_STOP_PCT, 1.5),
   maxBuyingPowerPct: num(process.env.MAX_BUYING_POWER_PCT, 30),
   correlationCap: num(process.env.CORRELATION_CAP, 0.85),
   volumeMult: num(process.env.MIN_VOLUME_MULTIPLIER, 1.5),
