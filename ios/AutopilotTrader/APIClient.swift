@@ -53,14 +53,17 @@ final class APIClient {
     private func url(_ pathAndQuery: String) -> URL {
         // Split "api/activity?limit=60" properly: URL.appendPathComponent
         // percent-encodes '?' into the path (%3F), which the server then
-        // 404s on. Build the query as a real URL query instead.
-        var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        // 404s on. Append only the path part, then attach the query via
+        // URLComponents. No force-unwraps: on any surprise we fall back to
+        // the path-only URL instead of crashing.
+        var u = baseURL
         let parts = pathAndQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
-        comps.path = ((comps.path as NSString).appendingPathComponent(parts[0]) as String)
-        if parts.count > 1 {
-            comps.percentEncodedQuery = parts[1]
+        u.appendPathComponent(parts[0])
+        guard parts.count > 1, let comps = URLComponents(url: u, resolvingAgainstBaseURL: false) else {
+            return u
         }
-        return comps.url!
+        comps.query = parts[1]
+        return comps.url ?? u
     }
 
     func getJSON<T: Decodable>(_ path: String) async throws -> T {
