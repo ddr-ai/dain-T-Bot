@@ -1,0 +1,42 @@
+# dain-T-Bot engine on Cloudflare Workers.
+#
+# Deploys: `npx wrangler deploy` (run by .github/workflows/deploy-engine.yml,
+# unlimited and free). No build-minute quota like Netlify's.
+#
+# One-time setup for the account owner:
+#   1. Push this file; the deploy workflow creates the Worker, its Durable
+#      Object namespace (SQLite-backed, free plan eligible) and the cron.
+#   2. Set secrets once (the deploy workflow does this from GitHub secrets):
+#        wrangler secret put API_AUTH_TOKEN      # bearer token for /api
+#        wrangler secret put CREDS_MASTER_KEY    # encrypts stored Gemini creds
+#   3. Your workers.dev URL is https://<name>.<subdomain>.workers.dev - set
+#      the repo variable ENGINE_API_BASE to it so the PWA build points here.
+
+name = "dain-t-bot-engine"
+main = "cloudflare/src/index.ts"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+# Every-minute heartbeat: manage positions + scan the entry window.
+# Free plan includes 5 cron triggers per account.
+[triggers]
+crons = ["* * * * *"]
+
+# The engine's brain: one strongly consistent Durable Object holding state,
+# encrypted credentials and the tick lock in SQLite-backed storage.
+[durable_objects]
+bindings = [{ name = "ENGINE", class_name = "EngineDO" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["EngineDO"]
+
+[observability]
+enabled = true
+
+# Non-secret configuration (defaults mirror the previous Netlify engine).
+# Secrets (API_AUTH_TOKEN, CREDS_MASTER_KEY) are applied separately.
+[vars]
+GEMINI_BASE_URL = "https://api.gemini.com"
+GEMINI_PUBLIC_BASE_URL = "https://api.gemini.com"
+TRADING_SYMBOLS = "btcusd,ethusd,solusd"

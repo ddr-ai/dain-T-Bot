@@ -31,13 +31,17 @@ in paper mode and read docs/VALIDATION.md before going live.
 
 ## Quick start - HOSTED ENGINE (recommended, zero setup)
 
-The engine is deployed as Netlify Functions + Blobs (state survives in a
-private blob store, a scheduled function ticks it every minute even with no
-app open). The PWA and the API live on one site:
+The engine runs on Cloudflare Workers (cloudflare/): the REST API and the
+every-minute cron tick are served by a single SQLite-backed Durable Object
+that holds the state, encrypted credentials and tick lock. Deploys are
+free and unmetered (`.github/workflows/deploy-engine.yml`). The PWA is
+hosted on GitHub Pages and points at the engine through the repo variable
+ENGINE_API_BASE:
 
-    https://dain-t-bot.netlify.app
+    PWA dashboard:   https://ddr-ai.github.io/dain-T-Bot/
+    Engine API:       https://dain-t-bot-engine.<subdomain>.workers.dev
 
-1. Open the URL, go to Settings, paste the API_AUTH_TOKEN (shared privately),
+1. Open the dashboard, go to Settings, paste the API_AUTH_TOKEN (shared privately),
    and save your Gemini key (Balances + Orders only). Both are AES-256-GCM
    encrypted with CREDS_MASTER_KEY before they touch storage.
 2. On the dashboard pick a run window (1h .. 7d) and press START RUN.
@@ -46,11 +50,12 @@ app open). The PWA and the API live on one site:
    positions keep being managed until stops/targets close them.
    EMERGENCY STOP ALL flattens immediately at market.
 
-The iOS app connects to the same URL: paste it on the Connect screen (it is
-pre-filled) plus the same API_AUTH_TOKEN. The hosted engine and the
-standalone backend speak the identical REST contract, so either can be
-swapped in at any time. netlify/smoke.ts runs an offline-ish local test of
-the serverless tick with a stub for @netlify/blobs.
+The iOS app connects to the same engine URL: paste it on the Connect screen
+plus the same API_AUTH_TOKEN. The hosted engine and the standalone backend
+speak the identical REST contract, so either can be swapped in at any time.
+cloudflare/test/ runs the whole ported engine offline in Node (Map store,
+WebCrypto, mocked Gemini feed); netlify/smoke.ts is the equivalent for the
+retired Netlify engine.
 
 ## Quick start - backend (paper mode, no key needed)
 
@@ -80,20 +85,29 @@ docs/DEPLOYMENT.md). Installable on iOS Safari (Add to Home Screen) and
 Android Chrome (install prompt); service worker caches the shell and last
 API responses for offline viewing.
 
-## Hosting split: PWA on GitHub Pages, engine on Netlify
+## Hosting split: PWA on GitHub Pages, engine on Cloudflare Workers
 
 The PWA is a static SPA and can be hosted anywhere. GitHub Pages hosts it
 for free with unlimited bandwidth: the workflow `.github/workflows/
-deploy-pwa.yml` builds it (subpath-aware, pointing at the engine) and
-publishes to https://ddr-ai.github.io/dain-T-Bot/ on every push. One-time
-setup: repo Settings -> Pages -> Source: "GitHub Actions".
+deploy-pwa.yml` builds it (subpath-aware, pointing at the engine via the
+repo variable ENGINE_API_BASE) and publishes to https://ddr-ai.github.io/
+dain-T-Bot/ on every push. One-time setup: repo Settings -> Pages ->
+Source: "GitHub Actions".
 
 The ENGINE cannot run on GitHub Pages - Pages is static-only (no /api
-endpoints, no scheduled ticks, no state storage, no secrets). It stays on
-Netlify Functions + Blobs, and the Pages-hosted PWA talks to it
-cross-origin (the API's CORS policy is open). Result: the Netlify site can
-serve the engine alone; the dashboard has a free home that never consumes
-Netlify build credits.
+endpoints, no scheduled ticks, no state storage, no secrets). It runs on
+Cloudflare Workers (cloudflare/, deployed by `.github/workflows/
+deploy-engine.yml`): the REST API and the every-minute cron tick are
+served by a single SQLite-backed Durable Object that holds the engine's
+state, encrypted credentials and tick lock. Workers free plan fits the
+whole workload (100k requests/day, ~1,440 cron ticks/day) and deploys via
+`wrangler deploy` are unmetered, so pushing to main always ships. The
+Pages-hosted PWA talks to the engine cross-origin (the API's CORS policy
+is open).
+
+Retired: the Netlify Functions + Blobs engine (netlify/) is no longer the
+deployment target; it stays in the repo as the reference implementation
+the Cloudflare port was derived from.
 
 ## Quick start - iOS app (unsigned, sideload with esign)
 

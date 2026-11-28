@@ -4,11 +4,14 @@
 # Source: "GitHub Actions". After that this workflow publishes automatically
 # at https://ddr-ai.github.io/dain-T-Bot/.
 #
-# The PWA is a static SPA: GitHub Pages hosts it for free with no build
-# minutes pressure on Netlify. The trading ENGINE (API endpoints, scheduled
-# ticks, state storage) cannot run on GitHub Pages - it stays on Netlify
-# Functions, and the PWA talks to it cross-origin (the API's CORS policy is
-# open). VITE_API_BASE below points the Pages build at the engine.
+# The PWA is a static SPA: GitHub Pages hosts it for free forever. The
+# trading ENGINE (API endpoints, scheduled ticks, state storage) runs on
+# Cloudflare Workers (free plan, unlimited deploys; see
+# .github/workflows/deploy-engine.yml). The Pages-hosted PWA talks to it
+# cross-origin (the API's CORS policy is open). VITE_API_BASE below points
+# the Pages build at the engine: set the repo VARIABLE ENGINE_API_BASE to
+# your workers.dev URL (https://dain-t-bot-engine.<subdomain>.workers.dev)
+# in Settings -> Secrets and variables -> Actions -> Variables.
 
 name: Deploy PWA to GitHub Pages
 
@@ -39,13 +42,21 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - name: Stop with guidance if ENGINE_API_BASE is not set
+        run: |
+          if [ -z "${ENGINE_API_BASE}" ]; then
+            echo "::error::Repo variable ENGINE_API_BASE is not set. Add it in Settings -> Secrets and variables -> Actions -> Variables with your engine URL (https://dain-t-bot-engine.<subdomain>.workers.dev)."
+            exit 1
+          fi
+        env:
+          ENGINE_API_BASE: ${{ vars.ENGINE_API_BASE }}
       - name: Install dependencies
         run: npm install --no-fund --no-audit
       - name: Typecheck + build
         run: npm run build
         env:
           GH_PAGES: '1'
-          VITE_API_BASE: https://dain-t-bot.netlify.app
+          VITE_API_BASE: ${{ vars.ENGINE_API_BASE }}
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

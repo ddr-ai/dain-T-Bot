@@ -17,6 +17,17 @@ jobs:
       - name: Run tests (no npm install needed - Node stdlib only)
         run: cd backend && npm test
 
+  cloudflare-engine-tests:
+    name: Cloudflare engine tests (portable Workers code)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Run tests (Node stdlib only; Map store + WebCrypto + mocked Gemini)
+        run: cd cloudflare && node --experimental-transform-types --no-warnings --test test/*.test.ts
+
   backend-backtest-smoke:
     name: Backtest CLI smoke test (live public data)
     runs-on: ubuntu-latest

@@ -1,0 +1,76 @@
+# Deploy the engine to Cloudflare Workers on every push to main.
+#
+# Why Cloudflare Workers (free plan): deploys via `wrangler deploy` are
+# unmetered (no build-minute quota like Netlify), the every-minute cron
+# trigger is included on the free plan, and the engine's state lives in a
+# SQLite-backed Durable Object (strongly consistent, free-tier eligible).
+# See wrangler.toml and cloudflare/ for the port.
+#
+# One-time account setup (repo owner, web only):
+#   1. Create a free Cloudflare account (workers.cloudflare.com).
+#   2. Create an API token: Account -> API Tokens -> "Edit Cloudflare
+#      Workers" template (or a custom token with Workers Scripts:Edit,
+#      Durable Objects + Cron permissions). Add it as the GitHub secret
+#      CLOUDFLARE_API_TOKEN. Also add your Cloudflare Account ID
+#      (dashboard right sidebar) as the GitHub secret CLOUDFLARE_ACCOUNT_ID.
+#   3. Add GitHub secrets API_AUTH_TOKEN (the bearer token the PWA already
+#      uses) and CREDS_MASTER_KEY (the same master key the Netlify engine
+#      used to encrypt stored Gemini credentials) - this workflow applies
+#      them as Worker secrets on every deploy.
+#   4. After the first deploy, note your workers.dev URL
+#      (https://dain-t-bot-engine.<subdomain>.workers.dev) and set the repo
+#      variable ENGINE_API_BASE to it - the PWA build points the dashboard
+#      at the engine through it.
+
+name: Deploy engine to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+    paths: ['cloudflare/**', 'wrangler.toml', '.github/workflows/deploy-engine.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: workers-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy engine (Worker + Durable Object + cron)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Install wrangler
+        run: npm install -g wrangler
+      - name: Deploy Worker (creates the Durable Object namespace + cron on first run)
+        run: wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Apply engine secrets (runtime, picked up without a redeploy)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+          CREDS_MASTER_KEY: ${{ secrets.CREDS_MASTER_KEY }}
+        run: |
+          if [ -n "$API_AUTH_TOKEN" ]; then
+            printf '%s' "$API_AUTH_TOKEN" | wrangler secret put API_AUTH_TOKEN
+          else
+            echo "::warning::API_AUTH_TOKEN secret not set - the API will be open to anyone with the URL"
+          fi
+          if [ -n "$CREDS_MASTER_KEY" ]; then
+            printf '%s' "$CREDS_MASTER_KEY" | wrangler secret put CREDS_MASTER_KEY
+          else
+            echo "::warning::CREDS_MASTER_KEY secret not set - storing Gemini credentials from the app will fail"
+          fi
+      - name: Smoke-check the engine
+        if: ${{ vars.ENGINE_API_BASE != '' }}
+        run: |
+          sleep 20
+          curl -fsS --max-time 30 "${{ vars.ENGINE_API_BASE }}/api/health" | grep -q '"ok":true' \
+            && echo "engine is live and healthy" \
+            || { echo "::error::engine health check failed"; exit 1; }
