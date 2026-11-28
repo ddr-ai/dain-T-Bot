@@ -80,6 +80,21 @@ docs/DEPLOYMENT.md). Installable on iOS Safari (Add to Home Screen) and
 Android Chrome (install prompt); service worker caches the shell and last
 API responses for offline viewing.
 
+## Hosting split: PWA on GitHub Pages, engine on Netlify
+
+The PWA is a static SPA and can be hosted anywhere. GitHub Pages hosts it
+for free with unlimited bandwidth: the workflow `.github/workflows/
+deploy-pwa.yml` builds it (subpath-aware, pointing at the engine) and
+publishes to https://ddr-ai.github.io/dain-T-Bot/ on every push. One-time
+setup: repo Settings -> Pages -> Source: "GitHub Actions".
+
+The ENGINE cannot run on GitHub Pages - Pages is static-only (no /api
+endpoints, no scheduled ticks, no state storage, no secrets). It stays on
+Netlify Functions + Blobs, and the Pages-hosted PWA talks to it
+cross-origin (the API's CORS policy is open). Result: the Netlify site can
+serve the engine alone; the dashboard has a free home that never consumes
+Netlify build credits.
+
 ## Quick start - iOS app (unsigned, sideload with esign)
 
 1. Push to GitHub - the workflow Build unsigned iOS IPA produces

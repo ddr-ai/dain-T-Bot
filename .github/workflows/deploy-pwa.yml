@@ -1,0 +1,64 @@
+# Deploy the PWA dashboard to GitHub Pages on every push to main.
+#
+# One-time setup (repo owner): Settings -> Pages -> Build and deployment ->
+# Source: "GitHub Actions". After that this workflow publishes automatically
+# at https://ddr-ai.github.io/dain-T-Bot/.
+#
+# The PWA is a static SPA: GitHub Pages hosts it for free with no build
+# minutes pressure on Netlify. The trading ENGINE (API endpoints, scheduled
+# ticks, state storage) cannot run on GitHub Pages - it stays on Netlify
+# Functions, and the PWA talks to it cross-origin (the API's CORS policy is
+# open). VITE_API_BASE below points the Pages build at the engine.
+
+name: Deploy PWA to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['pwa/**', '.github/workflows/deploy-pwa.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build PWA (Pages subpath)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pwa
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --no-fund --no-audit
+      - name: Typecheck + build
+        run: npm run build
+        env:
+          GH_PAGES: '1'
+          VITE_API_BASE: https://dain-t-bot.netlify.app
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pwa/dist
+
+  deploy:
+    name: Publish to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

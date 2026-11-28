@@ -11,8 +11,11 @@ root.render(
 )
 
 // Register the service worker in production builds (offline + install).
+// BASE_URL reflects the Vite base ('/' on a root host, '/dain-T-Bot/' on
+// GitHub Pages), so the same code works at any subpath.
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {
+  const swUrl = (import.meta.env.BASE_URL ?? '/') + 'sw.js'
+  navigator.serviceWorker.register(swUrl).catch(() => {
     /* offline support optional */
   })
 }
